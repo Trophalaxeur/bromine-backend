@@ -1,0 +1,132 @@
+import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { z } from 'zod';
+import { requireAuth } from '../lib/auth-middleware.ts';
+import { createLLMProvider } from '../lib/llm-provider.ts';
+import { loadJosiane, type CvBase } from '../lib/josiane.ts';
+import { loadCvSource } from '../lib/cv-content.ts';
+import { buildUserPrompt } from '../lib/prompt.ts';
+import { parseGenerationResponse } from '../lib/response-parser.ts';
+import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
+import { writeTailoredFiles, commitTailoredSession, tailoredDir } from '../lib/git.ts';
+import { renderTailoredPdf } from '../lib/pdf.ts';
+import { config } from '../config.ts';
+import type { HonoEnv } from '../hono-env.ts';
+
+export const cvRoutes = new Hono<HonoEnv>();
+cvRoutes.use('*', requireAuth);
+
+const generateSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+  name: z.string().optional(),
+  base: z.enum(['short', 'detailed', 'career-channel']),
+  locale: z.enum(['fr', 'en']),
+  instructions: z.string().min(1),
+  attachment: z
+    .object({
+      base64: z.string(),
+      mimeType: z.string(),
+    })
+    .optional(),
+});
+
+function slugify(name: string): string {
+  const date = new Date().toISOString().slice(0, 10);
+  const slug = name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `${date}-${slug}`;
+}
+
+cvRoutes.post('/cv/generate', async (c) => {
+  const body = generateSchema.parse(await c.req.json());
+  const base = body.base as CvBase;
+
+  const [josiane, cvSource] = await Promise.all([loadJosiane(base), loadCvSource(body.locale)]);
+  const systemPrompt = `${josiane}\n\n---\n\n# Current CV source (ground truth — do not invent facts beyond this)\n\n${cvSource}`;
+  const userPrompt = buildUserPrompt({
+    name: body.name,
+    base,
+    locale: body.locale,
+    instructions: body.instructions,
+    hasAttachment: Boolean(body.attachment),
+  });
+
+  const llm = createLLMProvider();
+  const responseText = await llm.complete({ systemPrompt, userPrompt, attachment: body.attachment });
+
+  const fallbackName = `Custom ${base} — ${new Date().toISOString().slice(0, 10)}`;
+  const parsed = parseGenerationResponse(responseText, fallbackName);
+  const slug = slugify(parsed.name);
+
+  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files);
+
+  // Reuse the existing sessionId when re-generating a live draft, otherwise
+  // mint a fresh one — this id is used for both the draft store key and the
+  // rendered PDF's on-disk filename, so the two always stay in sync.
+  const sessionId = body.sessionId && getDraft(body.sessionId) ? body.sessionId : randomUUID();
+  const pdfPath = await renderTailoredPdf(slug, base, sessionId);
+
+  const draft = upsertDraft(sessionId, {
+    slug,
+    name: parsed.name,
+    base,
+    locale: body.locale,
+    instructions: body.instructions,
+    files: parsed.files,
+    sections: parsed.sections,
+    pdfPath,
+  });
+
+  return c.json({
+    sessionId: draft.sessionId,
+    slug: draft.slug,
+    name: draft.name,
+    sections: draft.sections,
+    pdf_url: `/cv/sessions/${draft.sessionId}/pdf`,
+  });
+});
+
+cvRoutes.post('/cv/sessions/:sessionId/commit', async (c) => {
+  const sessionId = c.req.param('sessionId');
+  const draft = getDraft(sessionId);
+  if (!draft) return c.json({ error: 'Session not found or expired' }, 404);
+
+  const result = await commitTailoredSession(draft.slug);
+  return c.json({ committed: result.committed, slug: draft.slug });
+});
+
+cvRoutes.delete('/cv/sessions/:sessionId', (c) => {
+  const sessionId = c.req.param('sessionId');
+  const deleted = deleteDraft(sessionId);
+  return c.json({ deleted });
+});
+
+cvRoutes.get('/cv/sessions/:sessionId/pdf', async (c) => {
+  const sessionId = c.req.param('sessionId');
+  const draft = getDraft(sessionId);
+  if (!draft) return c.json({ error: 'Session not found or expired' }, 404);
+
+  const buffer = await readFile(draft.pdfPath);
+  return c.body(buffer, 200, { 'Content-Type': 'application/pdf' });
+});
+
+cvRoutes.get('/cv/sessions', async (c) => {
+  const tailoredRoot = path.join(config.carbonNotesPath, 'cv', 'tailored');
+  const slugs = await readdir(tailoredRoot).catch(() => [] as string[]);
+
+  const sessions = await Promise.all(
+    slugs.map(async (slug) => {
+      const briefPath = path.join(tailoredDir(slug), 'brief.md');
+      const brief = await readFile(briefPath, 'utf-8').catch(() => null);
+      return { slug, brief };
+    })
+  );
+
+  return c.json({ sessions: sessions.filter((s) => s.brief !== null) });
+});

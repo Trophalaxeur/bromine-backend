@@ -1,0 +1,31 @@
+{
+  "name": "bromine-backend",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=development node --experimental-strip-types --no-warnings --watch src/index.ts",
+    "start": "node --experimental-strip-types --no-warnings src/index.ts",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@hono/node-server": "^1.19.5",
+    "@playwright/test": "^1.60.0",
+    "google-auth-library": "^10.5.0",
+    "hono": "^4.10.6",
+    "js-yaml": "^4.2.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.9.1",
+    "eslint": "^10.3.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}
