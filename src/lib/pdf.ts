@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { config } from '../config.ts';
@@ -123,4 +123,15 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
 
 export function renderTailoredPdf(slug: string, base: CvBase, sessionId: string): Promise<string> {
   return enqueue(() => renderPdf(slug, base, sessionId));
+}
+
+/** Committed sessions are immutable (writeTailoredFiles only ever runs once
+ *  per slug's content, before commit) — so unlike renderTailoredPdf, a cached
+ *  file on disk keyed by slug is always still valid and worth reusing instead
+ *  of re-running the astro+Chromium pipeline on every "historique" pick. */
+export async function renderCommittedPdf(slug: string, base: CvBase): Promise<string> {
+  const cachedPath = path.join(PDF_CACHE_DIR, `${slug}.pdf`);
+  const cached = await stat(cachedPath).catch(() => null);
+  if (cached) return cachedPath;
+  return enqueue(() => renderPdf(slug, base, slug));
 }
