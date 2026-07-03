@@ -87,6 +87,11 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
   // Drain stderr unconditionally — an unread pipe fills its OS buffer and blocks
   // the child on its next write(), which would hang the render with no error.
   astroProcess.stderr?.on('data', (chunk: Buffer) => console.error(`[astro] ${chunk.toString().trimEnd()}`));
+  // Same for stdout — waitForServerReady only listens long enough to see "ready
+  // in", then removes its own listener; any output astro writes afterwards
+  // (request logs, warnings) would otherwise sit unread and eventually block
+  // the child's write(), hanging the render.
+  astroProcess.stdout?.on('data', (chunk: Buffer) => console.log(`[astro] ${chunk.toString().trimEnd()}`));
 
   try {
     await waitForServerReady(astroProcess);

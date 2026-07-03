@@ -40,6 +40,9 @@ export const config = {
 
   contentToken: process.env.CONTENT_TOKEN,
 
+  // Off by default — entries include user instructions and LLM output.
+  cvGenerationLogEnabled: process.env.CV_GENERATION_LOG === 'true',
+
   googleClientId: required('GOOGLE_CLIENT_ID'),
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
   allowedEmails: required('ALLOWED_EMAILS')
