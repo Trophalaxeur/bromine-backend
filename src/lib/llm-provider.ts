@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.ts';
 
 export interface LLMImageAttachment {
   base64: string;
-  mimeType: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 }
 
 export interface LLMRequest {
@@ -31,20 +34,36 @@ class ClaudeCLIProvider implements ILLMProvider {
           'set USE_CLAUDE_CLI=false and configure ANTHROPIC_API_KEY to test that path.'
       );
     }
-    return new Promise((resolve, reject) => {
-      const child = spawn('claude', ['-p', request.userPrompt, '--system-prompt', request.systemPrompt], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+
+    // The system prompt (Josiane + full CV source + memoire_cv.md) regularly
+    // exceeds Linux's per-argument execve() limit (MAX_ARG_STRLEN, 128 KiB) —
+    // passing it as a CLI arg fails with `spawn E2BIG`. Write it to a temp file
+    // and use --system-prompt-file instead; the user prompt goes over stdin
+    // for the same reason (smaller today, but no reason to leave it exposed to
+    // the same limit if a pasted job offer ever gets long).
+    const dir = await mkdtemp(path.join(tmpdir(), 'bromine-sysprompt-'));
+    const systemPromptFile = path.join(dir, 'system-prompt.txt');
+    try {
+      await writeFile(systemPromptFile, request.systemPrompt, 'utf-8');
+
+      return await new Promise((resolve, reject) => {
+        const child = spawn('claude', ['-p', '--system-prompt-file', systemPromptFile], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk) => (stdout += chunk));
+        child.stderr.on('data', (chunk) => (stderr += chunk));
+        child.on('error', reject);
+        child.on('close', (code) => {
+          if (code !== 0) reject(new Error(`claude CLI exited with code ${code}: ${stderr}`));
+          else resolve(stdout.trim());
+        });
+        child.stdin.end(request.userPrompt);
       });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (chunk) => (stdout += chunk));
-      child.stderr.on('data', (chunk) => (stderr += chunk));
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code !== 0) reject(new Error(`claude CLI exited with code ${code}: ${stderr}`));
-        else resolve(stdout.trim());
-      });
-    });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -63,7 +82,7 @@ class AnthropicSDKProvider implements ILLMProvider {
             type: 'image',
             source: {
               type: 'base64',
-              media_type: request.attachment.mimeType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+              media_type: request.attachment.mimeType,
               data: request.attachment.base64,
             },
           },

@@ -1,13 +1,39 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium } from '@playwright/test';
+import { chromium } from 'playwright';
 import { config } from '../config.ts';
 import type { CvBase } from './josiane.ts';
 
 const PDF_CACHE_DIR = path.join(import.meta.dirname, '..', '..', 'tmp', 'pdf');
 const DEV_PORT = 4321; // astro dev default — matches bismuth-blog's own convention
 const READY_TIMEOUT_MS = 30_000;
+const BASE_URL = `http://localhost:${DEV_PORT}`;
+
+// Same Satoshi → IBM Plex Sans swap as bismuth-blog/scripts/generate-cv-pdf.ts
+// (the canonical PDF generator) — Satoshi's variable font shows visible glyph
+// gaps on s-t pairs in Chromium's page.pdf() pipeline. Kept in sync manually;
+// see that script's IBM_PLEX_SANS_FACE_CSS for the source of truth.
+const IBM_PLEX_SANS_FACE_CSS = [400, 500, 600, 700]
+  .flatMap((weight) => [
+    `@font-face {
+      font-family: 'IBM Plex Sans';
+      font-style: normal;
+      font-weight: ${weight};
+      font-display: block;
+      src: url('${BASE_URL}/fonts/cv/ibm-plex-sans-latin.woff2') format('woff2');
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }`,
+    `@font-face {
+      font-family: 'IBM Plex Sans';
+      font-style: normal;
+      font-weight: ${weight};
+      font-display: block;
+      src: url('${BASE_URL}/fonts/cv/ibm-plex-sans-latin-ext.woff2') format('woff2');
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }`,
+  ])
+  .join('\n');
 
 // Chromium flags tuned for a 1 GB LXC — see gallium-homelab/docs/bromine.md
 // for the RAM/disk budget this keeps the render inside.
@@ -45,6 +71,9 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
   await mkdir(PDF_CACHE_DIR, { recursive: true });
   const outputPath = path.join(PDF_CACHE_DIR, `${sessionId}.pdf`);
 
+  const t0 = Date.now();
+  const elapsed = () => `${Date.now() - t0}ms`;
+
   const astroProcess = spawn('npx', ['astro', 'dev', '--port', String(DEV_PORT)], {
     cwd: config.bismuthBlogPath,
     env: {
@@ -55,19 +84,33 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // Drain stderr unconditionally — an unread pipe fills its OS buffer and blocks
+  // the child on its next write(), which would hang the render with no error.
+  astroProcess.stderr?.on('data', (chunk: Buffer) => console.error(`[astro] ${chunk.toString().trimEnd()}`));
+  // Same for stdout — waitForServerReady only listens long enough to see "ready
+  // in", then removes its own listener; any output astro writes afterwards
+  // (request logs, warnings) would otherwise sit unread and eventually block
+  // the child's write(), hanging the render.
+  astroProcess.stdout?.on('data', (chunk: Buffer) => console.log(`[astro] ${chunk.toString().trimEnd()}`));
 
   try {
     await waitForServerReady(astroProcess);
+    console.log(`[pdf] astro ready in ${elapsed()}`);
 
-    const url =
-      base === 'career-channel' ? `http://localhost:${DEV_PORT}/cv/tailored/${slug}/career-channel` : `http://localhost:${DEV_PORT}/cv/tailored/${slug}/print?variant=${base}`;
+    const url = base === 'career-channel' ? `${BASE_URL}/cv/tailored/${slug}/career-channel` : `${BASE_URL}/cv/tailored/${slug}/print?variant=${base}`;
 
     const browser = await chromium.launch({ args: CHROMIUM_ARGS });
+    console.log(`[pdf] chromium launched at ${elapsed()}`);
     try {
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: 'networkidle' });
+      console.log(`[pdf] page loaded (networkidle) at ${elapsed()}`);
+      await page.addStyleTag({ content: IBM_PLEX_SANS_FACE_CSS });
+      await page.addStyleTag({ content: ".font-satoshi { font-family: 'IBM Plex Sans', sans-serif !important; }" });
       await page.evaluate(() => document.fonts.ready);
+      console.log(`[pdf] fonts ready at ${elapsed()}`);
       await page.pdf({ path: outputPath, printBackground: base === 'detailed', format: 'A4', preferCSSPageSize: true });
+      console.log(`[pdf] pdf written at ${elapsed()}`);
     } finally {
       await browser.close();
     }

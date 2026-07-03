@@ -12,6 +12,7 @@ import { parseGenerationResponse } from '../lib/response-parser.ts';
 import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
 import { writeTailoredFiles, commitTailoredSession, tailoredDir } from '../lib/git.ts';
 import { renderTailoredPdf } from '../lib/pdf.ts';
+import { logGeneration } from '../lib/logger.ts';
 import { config } from '../config.ts';
 import type { HonoEnv } from '../hono-env.ts';
 
@@ -23,11 +24,11 @@ const generateSchema = z.object({
   name: z.string().optional(),
   base: z.enum(['short', 'detailed', 'career-channel']),
   locale: z.enum(['fr', 'en']),
-  instructions: z.string().min(1),
+  instructions: z.string().min(1).max(20_000),
   attachment: z
     .object({
-      base64: z.string(),
-      mimeType: z.string(),
+      base64: z.string().max(10_000_000),
+      mimeType: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
     })
     .optional(),
 });
@@ -37,7 +38,7 @@ function slugify(name: string): string {
   const slug = name
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '') // strip combining diacritics left by NFD normalization
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return `${date}-${slug}`;
@@ -57,12 +58,34 @@ cvRoutes.post('/cv/generate', async (c) => {
     hasAttachment: Boolean(body.attachment),
   });
 
+  // Full instructions can be arbitrary user/job-offer text up to 20k chars —
+  // fine in dev (own terminal), but stdout in prod flows into centralized
+  // logs (journald via the bromine-agent Ansible role), so only log length there.
+  if (config.isDev) {
+    console.log(`[cv/generate] base=${base} locale=${body.locale} instructions=${JSON.stringify(body.instructions)}`);
+  } else {
+    console.log(`[cv/generate] base=${base} locale=${body.locale} instructions_length=${body.instructions.length}`);
+  }
+
   const llm = createLLMProvider();
   const responseText = await llm.complete({ systemPrompt, userPrompt, attachment: body.attachment });
 
   const fallbackName = `Custom ${base} — ${new Date().toISOString().slice(0, 10)}`;
   const parsed = parseGenerationResponse(responseText, fallbackName);
   const slug = slugify(parsed.name);
+
+  console.log(`[cv/generate] name=${parsed.name} files=${parsed.files.map((f) => f.relativePath).join(', ')}`);
+  await logGeneration({
+    base,
+    locale: body.locale,
+    name: body.name,
+    instructions: body.instructions,
+    hasAttachment: Boolean(body.attachment),
+    userPrompt,
+    responseText,
+    parsedName: parsed.name,
+    parsedFiles: parsed.files.map((f) => f.relativePath),
+  });
 
   await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files);
 

@@ -23,7 +23,7 @@ It has three responsibilities:
   With only ~8 routes and no database, the real work here is LLM calls and file I/O — Hono's ~30% lower memory footprint matters on a 1 GB LXC where a PDF render already peaks around 450–550 MB.
 
 - **`@anthropic-ai/sdk`** in production, **Claude Code CLI** (subprocess) in development — see below.
-- **`@playwright/test`** for headless Chromium PDF rendering.
+- **`playwright`** for headless Chromium PDF rendering (not `@playwright/test` — no need for the test-runner/reporter weight in a production route).
 - **`google-auth-library`** for Google OAuth id_token verification (JWKS handled internally, no hand-rolled crypto).
 
 ## Environments
