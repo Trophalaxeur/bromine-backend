@@ -1,8 +1,9 @@
-import { mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from '../config.ts';
-import type { TailoredFile } from './sessions.ts';
+import type { TailoredFile, Section } from './sessions.ts';
+import type { CvBase } from './josiane.ts';
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -46,19 +47,45 @@ ${input.instructions}
 `;
 }
 
+export interface CommittedSession {
+  name: string;
+  base: CvBase;
+  locale: 'fr' | 'en';
+  sections: Section[];
+}
+
 /** Writes the tailored files to disk on the LOCAL checkout (dev checkout or
  *  the prod clone). Never commits — that only happens on "Valider"
- *  (see commitTailoredSession), and never at all when NODE_ENV=development. */
-export async function writeTailoredFiles(input: BriefInput, files: TailoredFile[]): Promise<void> {
+ *  (see commitTailoredSession), and never at all when NODE_ENV=development.
+ *
+ *  Also writes session.json alongside brief.md: the `sections` copy-blocks
+ *  otherwise only live in the in-memory Draft (sessions.ts), which is TTL'd
+ *  at 24h — without this, a session's copy-blocks are unrecoverable the
+ *  moment it's no longer the live draft (e.g. after a server restart, or once
+ *  the "historique" dropdown reloads it days later). */
+export async function writeTailoredFiles(input: BriefInput, files: TailoredFile[], sections: Section[]): Promise<void> {
   const dir = tailoredDir(input.slug);
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, 'brief.md'), buildBrief(input), 'utf-8');
+
+  const session: CommittedSession = { name: input.name, base: input.base as CvBase, locale: input.locale as 'fr' | 'en', sections };
+  await writeFile(path.join(dir, 'session.json'), JSON.stringify(session, null, 2), 'utf-8');
 
   for (const file of files) {
     const dest = path.join(dir, file.relativePath);
     await mkdir(path.dirname(dest), { recursive: true });
     await writeFile(dest, file.content, 'utf-8');
   }
+}
+
+/** Reads back session.json written by writeTailoredFiles — the source for
+ *  GET /cv/sessions/:slug once a session is no longer (or never was) the
+ *  live in-memory draft. Returns null for an unknown slug or a tailored dir
+ *  written before session.json existed. */
+export async function readCommittedSession(slug: string): Promise<CommittedSession | null> {
+  const raw = await readFile(path.join(tailoredDir(slug), 'session.json'), 'utf-8').catch(() => null);
+  if (!raw) return null;
+  return JSON.parse(raw) as CommittedSession;
 }
 
 /** Commits + pushes the tailored slug directory in carbon-notes. No-op in dev
