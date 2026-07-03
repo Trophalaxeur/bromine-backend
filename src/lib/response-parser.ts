@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { TailoredFile, Section } from './sessions.ts';
 
 export interface ParsedGeneration {
@@ -15,8 +16,19 @@ export function parseGenerationResponse(text: string, fallbackName: string): Par
   const fileBlockRegex = /##\s*FILE:\s*([^\n]+)\n+```(?:markdown|md)?\n([\s\S]*?)```/gi;
   for (const match of text.matchAll(fileBlockRegex)) {
     const relativePath = match[1].trim();
+
+    // relativePath is LLM-generated text, indirectly steerable by user-supplied
+    // instructions/attachments (prompt injection) — it later gets path.join'd
+    // into the tailored directory on disk (writeTailoredFiles in git.ts).
+    // Reject anything that would resolve outside that directory (CWE-22)
+    // rather than trusting the LLM to have followed the ## FILE: contract.
+    const normalized = path.normalize(relativePath);
+    if (path.isAbsolute(normalized) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      throw new Error(`LLM response FILE block escapes the tailored directory: "${relativePath}"`);
+    }
+
     const content = match[2].replace(/\n$/, '');
-    files.push({ relativePath, content });
+    files.push({ relativePath: normalized, content });
   }
 
   const sectionsMatch = text.match(/##\s*SECTIONS\s*\n+```json\n([\s\S]*?)```/i);
@@ -25,9 +37,10 @@ export function parseGenerationResponse(text: string, fallbackName: string): Par
     try {
       const raw = JSON.parse(sectionsMatch[1]) as { title: string; content: string }[];
       sections = raw.map((s) => ({ title: s.title, content: s.content, copyable: true as const }));
-    } catch {
+    } catch (err) {
       // Fall through with empty sections rather than failing the whole generation —
       // the PDF and raw files are still usable even if the copy-blocks parse fails.
+      console.warn('Failed to parse ## SECTIONS block from LLM response:', err);
       sections = [];
     }
   }

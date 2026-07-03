@@ -11,6 +11,17 @@ export async function loadCvSource(locale: 'fr' | 'en'): Promise<string> {
 
   const sections: string[] = [];
 
+  // cv/memoire_cv.md — the factual source of truth SKILL.md §2 ranks above the
+  // experience files' own prose (context, team, decisions, results, anecdotes
+  // not yet folded into cv/{locale}/experiences/*.md). Not locale-specific:
+  // same facts feed both the fr and en rewrites. SKILL.md §1 requires
+  // consulting it "systématiquement avant toute réécriture" — without it here,
+  // Josiane only sees the already-written prose and can't draw on the richer
+  // underlying facts when tailoring.
+  const memoirePath = path.join(config.carbonNotesPath, 'cv', 'memoire_cv.md');
+  const memoire = await readFile(memoirePath, 'utf-8').catch(() => null);
+  if (memoire) sections.push(`### cv/memoire_cv.md\n\n${memoire}`);
+
   for (const entry of topLevelFiles) {
     if (entry.isFile() && entry.name.endsWith('.md')) {
       const content = await readFile(path.join(localeDir, entry.name), 'utf-8');
