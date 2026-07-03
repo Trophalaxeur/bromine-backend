@@ -58,7 +58,14 @@ cvRoutes.post('/cv/generate', async (c) => {
     hasAttachment: Boolean(body.attachment),
   });
 
-  console.log(`[cv/generate] base=${base} locale=${body.locale} instructions=${JSON.stringify(body.instructions)}`);
+  // Full instructions can be arbitrary user/job-offer text up to 20k chars —
+  // fine in dev (own terminal), but stdout in prod flows into centralized
+  // logs (journald via the bromine-agent Ansible role), so only log length there.
+  if (config.isDev) {
+    console.log(`[cv/generate] base=${base} locale=${body.locale} instructions=${JSON.stringify(body.instructions)}`);
+  } else {
+    console.log(`[cv/generate] base=${base} locale=${body.locale} instructions_length=${body.instructions.length}`);
+  }
 
   const llm = createLLMProvider();
   const responseText = await llm.complete({ systemPrompt, userPrompt, attachment: body.attachment });

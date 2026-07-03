@@ -22,9 +22,18 @@ export function parseGenerationResponse(text: string, fallbackName: string): Par
     // into the tailored directory on disk (writeTailoredFiles in git.ts).
     // Reject anything that would resolve outside that directory (CWE-22)
     // rather than trusting the LLM to have followed the ## FILE: contract.
-    const normalized = path.normalize(relativePath);
-    if (path.isAbsolute(normalized) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
-      throw new Error(`LLM response FILE block escapes the tailored directory: "${relativePath}"`);
+    //
+    // Validated as a POSIX path regardless of host OS (path.posix, not path) —
+    // the tailored directory is always a Linux checkout (see README), and
+    // path.normalize()'s host-OS rules would silently accept a backslash as a
+    // literal filename character on POSIX instead of rejecting it as a
+    // (Windows-style) separator. Directory-like results ('.' or a trailing
+    // '/') are rejected too — they'd pass the traversal check but blow up
+    // writeFile() with EISDIR downstream.
+    const normalized = path.posix.normalize(relativePath);
+    const looksLikeDirectory = normalized === '.' || normalized.endsWith('/');
+    if (relativePath.includes('\\') || looksLikeDirectory || path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
+      throw new Error(`LLM response FILE block has an invalid path: "${relativePath}"`);
     }
 
     const content = match[2].replace(/\n$/, '');
