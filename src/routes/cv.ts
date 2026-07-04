@@ -8,11 +8,12 @@ import { createLLMProvider } from '../lib/llm-provider.ts';
 import { loadJosiane, type CvBase } from '../lib/josiane.ts';
 import { loadCvSource } from '../lib/cv-content.ts';
 import { buildUserPrompt } from '../lib/prompt.ts';
-import { parseGenerationResponse } from '../lib/response-parser.ts';
+import { parseGenerationResponse, deriveSections } from '../lib/response-parser.ts';
 import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
 import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession } from '../lib/git.ts';
 import { renderTailoredPdf, renderCommittedPdf } from '../lib/pdf.ts';
 import { logGeneration } from '../lib/logger.ts';
+import { startProgress, setPhase, setReady, setError, getProgress } from '../lib/progress.ts';
 import { config } from '../config.ts';
 import type { HonoEnv } from '../hono-env.ts';
 
@@ -44,10 +45,13 @@ function slugify(name: string): string {
   return `${date}-${slug}`;
 }
 
-cvRoutes.post('/cv/generate', async (c) => {
-  const body = generateSchema.parse(await c.req.json());
-  const base = body.base as CvBase;
+type GenerateBody = z.infer<typeof generateSchema>;
 
+/** The actual generation pipeline — deliberately NOT awaited by the route
+ *  handler below. It can take anywhere from seconds to a few minutes (mostly
+ *  the LLM call), and the extension polls GET /cv/sessions/:id/progress
+ *  instead of holding one long-lived request open. */
+async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody): Promise<void> {
   const [josiane, cvSource] = await Promise.all([loadJosiane(base), loadCvSource(body.locale)]);
   const systemPrompt = `${josiane}\n\n---\n\n# Current CV source (ground truth — do not invent facts beyond this)\n\n${cvSource}`;
   const userPrompt = buildUserPrompt({
@@ -68,10 +72,13 @@ cvRoutes.post('/cv/generate', async (c) => {
   }
 
   const llm = createLLMProvider();
+  const llmStart = Date.now();
   const responseText = await llm.complete({ systemPrompt, userPrompt, attachment: body.attachment });
+  console.log(`[cv/generate] LLM call took ${Date.now() - llmStart}ms`);
 
   const fallbackName = `Custom ${base} — ${new Date().toISOString().slice(0, 10)}`;
   const parsed = parseGenerationResponse(responseText, fallbackName);
+  const sections = deriveSections(parsed.files, base);
   const slug = slugify(parsed.name);
 
   console.log(`[cv/generate] name=${parsed.name} files=${parsed.files.map((f) => f.relativePath).join(', ')}`);
@@ -87,12 +94,10 @@ cvRoutes.post('/cv/generate', async (c) => {
     parsedFiles: parsed.files.map((f) => f.relativePath),
   });
 
-  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files, parsed.sections);
+  setPhase(sessionId, 'writing_files');
+  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files, sections);
 
-  // Reuse the existing sessionId when re-generating a live draft, otherwise
-  // mint a fresh one — this id is used for both the draft store key and the
-  // rendered PDF's on-disk filename, so the two always stay in sync.
-  const sessionId = body.sessionId && getDraft(body.sessionId) ? body.sessionId : randomUUID();
+  setPhase(sessionId, 'rendering_pdf');
   const pdfPath = await renderTailoredPdf(slug, base, sessionId);
 
   const draft = upsertDraft(sessionId, {
@@ -102,17 +107,44 @@ cvRoutes.post('/cv/generate', async (c) => {
     locale: body.locale,
     instructions: body.instructions,
     files: parsed.files,
-    sections: parsed.sections,
+    sections,
     pdfPath,
   });
 
-  return c.json({
+  setReady(sessionId, {
     sessionId: draft.sessionId,
     slug: draft.slug,
     name: draft.name,
     sections: draft.sections,
     pdf_url: `/cv/sessions/${draft.sessionId}/pdf`,
   });
+}
+
+cvRoutes.post('/cv/generate', async (c) => {
+  const body = generateSchema.parse(await c.req.json());
+  const base = body.base as CvBase;
+
+  // Reuse the existing sessionId when re-generating a live draft, otherwise
+  // mint a fresh one — this id is used for both the draft store key and the
+  // rendered PDF's on-disk filename, so the two always stay in sync. Decided
+  // upfront (not after the LLM call) since the client needs it immediately to
+  // start polling progress.
+  const sessionId = body.sessionId && getDraft(body.sessionId) ? body.sessionId : randomUUID();
+  startProgress(sessionId);
+
+  runGeneration(sessionId, base, body).catch((err) => {
+    console.error(`[cv/generate] session=${sessionId} failed:`, err);
+    setError(sessionId, err instanceof Error ? err.message : String(err));
+  });
+
+  return c.json({ sessionId, status: 'generating' }, 202);
+});
+
+cvRoutes.get('/cv/sessions/:sessionId/progress', (c) => {
+  const sessionId = c.req.param('sessionId');
+  const progress = getProgress(sessionId);
+  if (!progress) return c.json({ error: 'Session not found or expired' }, 404);
+  return c.json(progress);
 });
 
 cvRoutes.post('/cv/sessions/:sessionId/commit', async (c) => {

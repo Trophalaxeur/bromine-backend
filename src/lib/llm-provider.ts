@@ -90,9 +90,13 @@ class AnthropicSDKProvider implements ILLMProvider {
       : request.userPrompt;
 
     const response = await this.#client.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-opus-4-8',
       max_tokens: 8192,
-      system: [{ type: 'text', text: request.systemPrompt, cache_control: { type: 'ephemeral' } }],
+      // 1h TTL (not the 5min default) — Florian iterates on the same base/locale
+      // across several regenerations within a session while tweaking
+      // instructions, and the system prompt (Josiane + full CV source +
+      // memoire_cv.md) is the expensive part to reprocess from cold each time.
+      system: [{ type: 'text', text: request.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }],
       messages: [{ role: 'user', content: userContent }],
     });
 
