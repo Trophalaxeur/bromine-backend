@@ -10,8 +10,8 @@ import { loadCvSource } from '../lib/cv-content.ts';
 import { buildUserPrompt } from '../lib/prompt.ts';
 import { parseGenerationResponse } from '../lib/response-parser.ts';
 import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
-import { writeTailoredFiles, commitTailoredSession, tailoredDir } from '../lib/git.ts';
-import { renderTailoredPdf } from '../lib/pdf.ts';
+import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession } from '../lib/git.ts';
+import { renderTailoredPdf, renderCommittedPdf } from '../lib/pdf.ts';
 import { logGeneration } from '../lib/logger.ts';
 import { config } from '../config.ts';
 import type { HonoEnv } from '../hono-env.ts';
@@ -87,7 +87,7 @@ cvRoutes.post('/cv/generate', async (c) => {
     parsedFiles: parsed.files.map((f) => f.relativePath),
   });
 
-  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files);
+  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files, parsed.sections);
 
   // Reuse the existing sessionId when re-generating a live draft, otherwise
   // mint a fresh one — this id is used for both the draft store key and the
@@ -130,13 +130,41 @@ cvRoutes.delete('/cv/sessions/:sessionId', (c) => {
   return c.json({ deleted });
 });
 
-cvRoutes.get('/cv/sessions/:sessionId/pdf', async (c) => {
-  const sessionId = c.req.param('sessionId');
-  const draft = getDraft(sessionId);
-  if (!draft) return c.json({ error: 'Session not found or expired' }, 404);
+// Serves both a live draft (by sessionId, in-memory) and a committed session
+// (by slug, read from carbon-notes) — the two id spaces never collide since
+// slugs are date-prefixed kebab-case and sessionIds are UUIDs, and this keeps
+// a single pdf_url shape for both cases.
+cvRoutes.get('/cv/sessions/:id/pdf', async (c) => {
+  const id = c.req.param('id');
 
-  const buffer = await readFile(draft.pdfPath);
+  const draft = getDraft(id);
+  if (draft) {
+    const buffer = await readFile(draft.pdfPath);
+    return c.body(buffer, 200, { 'Content-Type': 'application/pdf' });
+  }
+
+  const committed = await readCommittedSession(id);
+  if (!committed) return c.json({ error: 'Session not found or expired' }, 404);
+
+  const pdfPath = await renderCommittedPdf(id, committed.base);
+  const buffer = await readFile(pdfPath);
   return c.body(buffer, 200, { 'Content-Type': 'application/pdf' });
+});
+
+// Reload a previously-committed session for the "historique" dropdown — the
+// in-memory Draft is TTL'd at 24h and gone after commit anyway, so this reads
+// session.json (written by writeTailoredFiles alongside brief.md) instead.
+cvRoutes.get('/cv/sessions/:slug', async (c) => {
+  const slug = c.req.param('slug');
+  const committed = await readCommittedSession(slug);
+  if (!committed) return c.json({ error: 'Session not found' }, 404);
+
+  return c.json({
+    slug,
+    name: committed.name,
+    sections: committed.sections,
+    pdf_url: `/cv/sessions/${slug}/pdf`,
+  });
 });
 
 cvRoutes.get('/cv/sessions', async (c) => {
