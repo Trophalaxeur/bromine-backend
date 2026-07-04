@@ -75,7 +75,7 @@ Provisioned via `gallium-homelab` (Terraform `terraform/bromine.tf` + Ansible ro
 
 ⚠️ **RAM/disk are sized tight on purpose** (1 GB RAM / 5 GB disk — this backend handles maybe 10 requests/week, not a public service). A PDF render (`astro dev` + Chromium, both spawned fresh per request, never kept warm) peaks around 450–550 MB. If you see OOM kills or the disk filling up (`bismuth-blog`'s `node_modules` + Chromium + the Astro Content Layer cache add up), bump `memory.dedicated` / `disk.size` in `gallium-homelab/terraform/bromine.tf` and re-apply — don't over-provision preemptively for a workload this light.
 
-**Network**: LAN-only for now (`http://bromine.lan:3000`). No Cloudflare Tunnel is configured — see `gallium-homelab/docs/bromine.md` for how to add one later if you need access from outside the home network (e.g. triggering a generation from a phone off-WiFi).
+**Network**: LAN-only, served over HTTPS at `https://bromine.flefevre.fr`. The extension runs in a secure context (WebExtension page), so Firefox force-upgrades any plain-HTTP `fetch()` to HTTPS — the backend *must* be reachable over TLS even on the LAN. Termination is handled by **Caddy** on the same LXC (`:443` → `reverse_proxy 127.0.0.1:3000`); the app itself stays plain HTTP bound to loopback (`BIND_HOST=127.0.0.1`) and never sees the TLS key. The certificate is a real Let's Encrypt cert for `bromine.flefevre.fr`, issued via DNS-01 on the AdGuard LXC and pushed to Caddy over SSH — see `gallium-homelab/docs/bromine.md` for the full TLS + renewal picture. No internet exposure; a Cloudflare Tunnel remains an option later if off-network access is ever needed.
 
 ## API
 
