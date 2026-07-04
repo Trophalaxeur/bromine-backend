@@ -55,13 +55,5 @@ Some experience files bundle several distinct clients/missions in one file (e.g.
 
 Note on skill categories: the category order (Leadership, Delivery, Quality, Frontend, ...) is fixed site-wide and cannot be changed per-CV — only the item order and bold emphasis within each category are yours to edit.
 
-## SECTIONS
-\`\`\`json
-[
-  { "title": "Profil", "content": "<the ${input.base} block body for profile.md, plain text ready to paste>" },
-  { "title": "<Company — Role>", "content": "<the ${input.base} block body for that experience, plain text ready to paste>" }
-]
-\`\`\`
-
-The SECTIONS array must mirror the FILE blocks — one entry per file that has user-facing prose, in the same order, with clean copy-paste-ready text (no markdown fences, no frontmatter).`;
+Do not emit a SECTIONS block — the backend derives copy-paste sections directly from the FILE blocks above.`;
 }
