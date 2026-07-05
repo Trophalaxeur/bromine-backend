@@ -13,6 +13,6 @@ app.route('/', cvRoutes);
 
 await pullContentRepos();
 
-serve({ fetch: app.fetch, port: config.port }, (info) => {
-  console.log(`bromine-backend listening on :${info.port} (${config.nodeEnv})`);
+serve({ fetch: app.fetch, port: config.port, hostname: config.bindHost }, (info) => {
+  console.log(`bromine-backend listening on ${config.bindHost ?? '*'}:${info.port} (${config.nodeEnv})`);
 });
