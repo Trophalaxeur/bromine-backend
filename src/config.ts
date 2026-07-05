@@ -34,7 +34,7 @@ export const config = {
   // only ever needs to listen on loopback — binding all interfaces would let a
   // LAN client hit :3000 directly and bypass TLS. Dev keeps @hono/node-server's
   // default bind (undefined) so `localhost` / LAN dev access is unchanged.
-  bindHost: nodeEnv === 'production' ? (process.env.BIND_HOST ?? '127.0.0.1') : undefined,
+  bindHost: nodeEnv === 'production' ? (process.env.BIND_HOST?.trim() || '127.0.0.1') : undefined,
 
   useClaudeCli: nodeEnv !== 'production' && process.env.USE_CLAUDE_CLI !== 'false',
   anthropicApiKey: nodeEnv === 'production' || process.env.USE_CLAUDE_CLI === 'false' ? required('ANTHROPIC_API_KEY') : undefined,
