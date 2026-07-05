@@ -82,13 +82,13 @@ Provisioned via `gallium-homelab` (Terraform `terraform/bromine.tf` + Ansible ro
 Once a change is merged to `main`, ship it to the LXC in one command from thallium:
 
 ```bash
-ssh root@192.168.1.61 bromine-deploy
+ssh root@bromine.lan bromine-deploy
 ```
 
 `bromine-deploy` (installed on the LXC by the `gallium-homelab` Ansible role) runs `git pull --ff-only` + `npm ci` as `bromineuser`, then restarts the `bromine-backend` service. This is the normal path — it does **not** need Ansible or a full playbook run. Handy thallium alias:
 
 ```bash
-alias bromine-deploy='ssh root@192.168.1.61 bromine-deploy'
+alias bromine-deploy='ssh root@bromine.lan bromine-deploy'
 ```
 
 Notes:
