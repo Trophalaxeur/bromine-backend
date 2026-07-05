@@ -77,6 +77,25 @@ Provisioned via `gallium-homelab` (Terraform `terraform/bromine.tf` + Ansible ro
 
 **Network**: LAN-only, served over HTTPS at `https://bromine.flefevre.fr`. The extension runs in a secure context (WebExtension page), so Firefox force-upgrades any plain-HTTP `fetch()` to HTTPS — the backend *must* be reachable over TLS even on the LAN. Termination is handled by **Caddy** on the same LXC (`:443` → `reverse_proxy 127.0.0.1:3000`); the app itself stays plain HTTP bound to loopback (`BIND_HOST=127.0.0.1`) and never sees the TLS key. The certificate is a real Let's Encrypt cert for `bromine.flefevre.fr`, issued via DNS-01 on the AdGuard LXC and pushed to Caddy over SSH — see `gallium-homelab/docs/bromine.md` for the full TLS + renewal picture. No internet exposure; a Cloudflare Tunnel remains an option later if off-network access is ever needed.
 
+### Deploying an update
+
+Once a change is merged to `main`, ship it to the LXC in one command from thallium:
+
+```bash
+ssh root@192.168.1.61 bromine-deploy
+```
+
+`bromine-deploy` (installed on the LXC by the `gallium-homelab` Ansible role) runs `git pull --ff-only` + `npm ci` as `bromineuser`, then restarts the `bromine-backend` service. This is the normal path — it does **not** need Ansible or a full playbook run. Handy thallium alias:
+
+```bash
+alias bromine-deploy='ssh root@192.168.1.61 bromine-deploy'
+```
+
+Notes:
+- `--ff-only` fails loudly on local divergence instead of silently discarding it. The prod checkout is meant to be a clean mirror of `main` — never edit files in place on the box; push upstream and redeploy.
+- Verify after: `curl https://bromine.flefevre.fr/health` (or `systemctl status bromine-backend` on the box).
+- Use the full `ansible-playbook playbook.yml --limit bromine` (in `gallium-homelab`) only when the infra role itself changed, not for routine code updates.
+
 ## API
 
 | Route | Auth | Description |
