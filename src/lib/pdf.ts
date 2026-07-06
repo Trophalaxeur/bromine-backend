@@ -6,34 +6,39 @@ import { config } from '../config.ts';
 import type { CvBase } from './josiane.ts';
 
 const PDF_CACHE_DIR = path.join(import.meta.dirname, '..', '..', 'tmp', 'pdf');
-const DEV_PORT = 4321; // astro dev default — matches bismuth-blog's own convention
+// Just a hint passed as --port: vite silently picks another port if this one
+// is taken (e.g. by an orphaned astro dev from a previous render), so the
+// actual port is always read back from astro's own stdout — see
+// waitForAstroServer — rather than assumed to be this value.
+const PREFERRED_DEV_PORT = 4321;
 const READY_TIMEOUT_MS = 30_000;
-const BASE_URL = `http://localhost:${DEV_PORT}`;
 
 // Same Satoshi → IBM Plex Sans swap as bismuth-blog/scripts/generate-cv-pdf.ts
 // (the canonical PDF generator) — Satoshi's variable font shows visible glyph
 // gaps on s-t pairs in Chromium's page.pdf() pipeline. Kept in sync manually;
 // see that script's IBM_PLEX_SANS_FACE_CSS for the source of truth.
-const IBM_PLEX_SANS_FACE_CSS = [400, 500, 600, 700]
-  .flatMap((weight) => [
-    `@font-face {
-      font-family: 'IBM Plex Sans';
-      font-style: normal;
-      font-weight: ${weight};
-      font-display: block;
-      src: url('${BASE_URL}/fonts/cv/ibm-plex-sans-latin.woff2') format('woff2');
-      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-    }`,
-    `@font-face {
-      font-family: 'IBM Plex Sans';
-      font-style: normal;
-      font-weight: ${weight};
-      font-display: block;
-      src: url('${BASE_URL}/fonts/cv/ibm-plex-sans-latin-ext.woff2') format('woff2');
-      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-    }`,
-  ])
-  .join('\n');
+function buildFontFaceCss(baseUrl: string): string {
+  return [400, 500, 600, 700]
+    .flatMap((weight) => [
+      `@font-face {
+        font-family: 'IBM Plex Sans';
+        font-style: normal;
+        font-weight: ${weight};
+        font-display: block;
+        src: url('${baseUrl}/fonts/cv/ibm-plex-sans-latin.woff2') format('woff2');
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }`,
+      `@font-face {
+        font-family: 'IBM Plex Sans';
+        font-style: normal;
+        font-weight: ${weight};
+        font-display: block;
+        src: url('${baseUrl}/fonts/cv/ibm-plex-sans-latin-ext.woff2') format('woff2');
+        unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+      }`,
+    ])
+    .join('\n');
+}
 
 // Chromium flags tuned for a 1 GB LXC — see gallium-homelab/docs/bromine.md
 // for the RAM/disk budget this keeps the render inside.
@@ -49,22 +54,87 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-function waitForServerReady(child: ChildProcess): Promise<void> {
+// Resolves with the port astro actually bound to — vite logs "ready in"
+// before the "Local  http://localhost:PORT/" line, and the two can name
+// different ports when the preferred one was taken, so both must be seen
+// before this is trustworthy.
+function waitForAstroServer(child: ChildProcess): Promise<number> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('astro dev did not become ready in time')), READY_TIMEOUT_MS);
+    // Accumulated across chunks rather than matched per-chunk — stdout is a
+    // stream, so "ready in" or the "http://localhost:PORT" line can land
+    // split across two `data` events and never match if tested in isolation.
+    let buffered = '';
+    let port: number | null = null;
+    let readyLogged = false;
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.stdout?.off('data', onData);
+      child.off('error', onError);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('astro dev did not become ready in time'));
+    }, READY_TIMEOUT_MS);
+    const tryResolve = () => {
+      if (port === null || !readyLogged) return;
+      cleanup();
+      resolve(port);
+    };
     const onData = (chunk: Buffer) => {
-      if (chunk.toString().includes('ready in')) {
-        clearTimeout(timeout);
-        child.stdout?.off('data', onData);
-        resolve();
-      }
+      buffered += chunk.toString();
+      if (buffered.includes('ready in')) readyLogged = true;
+      const match = /https?:\/\/localhost:(\d+)/.exec(buffered);
+      if (match) port = Number(match[1]);
+      tryResolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
     };
     child.stdout?.on('data', onData);
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
+    child.on('error', onError);
   });
+}
+
+// npx doesn't reliably forward SIGTERM to the astro process it spawns, so
+// killing just the returned ChildProcess leaves astro (and its esbuild
+// children) running as an orphan holding the dev port — the next render then
+// binds a different port while this file's BASE_URL still points at the
+// stale one, silently serving a 404 for the new slug. Spawning detached puts
+// astro in its own process group; killing the negated pid signals the whole
+// group at once.
+const KILL_ESCALATION_DELAY_MS = 3_000;
+
+function killProcessTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  const pid = child.pid;
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch (err) {
+    // ESRCH just means the group is already gone — anything else (e.g.
+    // EPERM) is worth knowing about instead of silently leaving an orphan.
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      console.error(`[pdf] failed to SIGTERM astro process group ${pid}:`, err);
+    }
+    return;
+  }
+
+  // Not awaited — a single SIGTERM is enough in the overwhelmingly common
+  // case, and blocking every render's response on this grace period isn't
+  // worth it. Escalates in the background if the group is still alive once
+  // the grace period elapses.
+  setTimeout(() => {
+    try {
+      // Signal 0 only checks liveness — throws ESRCH once the whole group
+      // has exited, which is the expected outcome after a plain SIGTERM.
+      process.kill(-pid, 0);
+      process.kill(-pid, 'SIGKILL');
+      console.error(`[pdf] astro process group ${pid} ignored SIGTERM — sent SIGKILL`);
+    } catch {
+      // Group already exited — SIGTERM was enough.
+    }
+  }, KILL_ESCALATION_DELAY_MS).unref();
 }
 
 async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise<string> {
@@ -74,7 +144,7 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
   const t0 = Date.now();
   const elapsed = () => `${Date.now() - t0}ms`;
 
-  const astroProcess = spawn('npx', ['astro', 'dev', '--port', String(DEV_PORT)], {
+  const astroProcess = spawn('npx', ['astro', 'dev', '--port', String(PREFERRED_DEV_PORT)], {
     cwd: config.bismuthBlogPath,
     env: {
       ...process.env,
@@ -83,29 +153,37 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
       CONTENT_TOKEN: config.contentToken ?? '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
   // Drain stderr unconditionally — an unread pipe fills its OS buffer and blocks
   // the child on its next write(), which would hang the render with no error.
   astroProcess.stderr?.on('data', (chunk: Buffer) => console.error(`[astro] ${chunk.toString().trimEnd()}`));
-  // Same for stdout — waitForServerReady only listens long enough to see "ready
-  // in", then removes its own listener; any output astro writes afterwards
+  // Same for stdout — waitForAstroServer only listens long enough to see "ready
+  // in" and the port line, then removes its own listener; any output astro writes afterwards
   // (request logs, warnings) would otherwise sit unread and eventually block
   // the child's write(), hanging the render.
   astroProcess.stdout?.on('data', (chunk: Buffer) => console.log(`[astro] ${chunk.toString().trimEnd()}`));
 
   try {
-    await waitForServerReady(astroProcess);
-    console.log(`[pdf] astro ready in ${elapsed()}`);
+    const port = await waitForAstroServer(astroProcess);
+    const baseUrl = `http://localhost:${port}`;
+    console.log(`[pdf] astro ready on port ${port} in ${elapsed()}`);
 
-    const url = base === 'career-channel' ? `${BASE_URL}/cv/tailored/${slug}/career-channel` : `${BASE_URL}/cv/tailored/${slug}/print?variant=${base}`;
+    const url = base === 'career-channel' ? `${baseUrl}/cv/tailored/${slug}/career-channel` : `${baseUrl}/cv/tailored/${slug}/print?variant=${base}`;
 
     const browser = await chromium.launch({ args: CHROMIUM_ARGS });
     console.log(`[pdf] chromium launched at ${elapsed()}`);
     try {
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: 'networkidle' });
+      const response = await page.goto(url, { waitUntil: 'networkidle' });
+      // page.goto only rejects on network failure, never on a non-2xx status —
+      // without this check astro's own 404 page (e.g. a getStaticPaths that
+      // didn't match this slug) gets happily printed to PDF instead of failing.
+      if (!response || !response.ok()) {
+        throw new Error(`astro returned HTTP ${response?.status() ?? 'no response'} for ${url} — refusing to render the error page to PDF`);
+      }
       console.log(`[pdf] page loaded (networkidle) at ${elapsed()}`);
-      await page.addStyleTag({ content: IBM_PLEX_SANS_FACE_CSS });
+      await page.addStyleTag({ content: buildFontFaceCss(baseUrl) });
       await page.addStyleTag({ content: ".font-satoshi { font-family: 'IBM Plex Sans', sans-serif !important; }" });
       await page.evaluate(() => document.fonts.ready);
       console.log(`[pdf] fonts ready at ${elapsed()}`);
@@ -115,7 +193,7 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
       await browser.close();
     }
   } finally {
-    astroProcess.kill();
+    killProcessTree(astroProcess);
   }
 
   return outputPath;
