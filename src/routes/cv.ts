@@ -59,13 +59,14 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   await pullContentRepos();
 
   const [josiane, cvSource] = await Promise.all([loadJosiane(base), loadCvSource(body.locale)]);
-  const systemPrompt = `${josiane}\n\n---\n\n# Current CV source (ground truth — do not invent facts beyond this)\n\n${cvSource}`;
+  const systemPrompt = `${josiane}\n\n---\n\n# Current CV source (ground truth — do not invent facts beyond this)\n\n${cvSource.content}`;
   const userPrompt = buildUserPrompt({
     name: body.name,
     base,
     locale: body.locale,
     instructions: body.instructions,
     hasAttachment: Boolean(body.attachment),
+    experienceFiles: cvSource.experienceFiles,
   });
 
   // Full instructions can be arbitrary user/job-offer text up to 20k chars —

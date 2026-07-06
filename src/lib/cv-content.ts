@@ -2,10 +2,20 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.ts';
 
+export interface CvSource {
+  content: string;
+  // Real filenames under cv/<locale>/experiences/ — handed to buildUserPrompt
+  // so it can enumerate them as a literal checklist instead of relying on the
+  // LLM to recall every "### cv/<locale>/experiences/*.md" header buried in
+  // `content` above, which is how a repositioning request silently lost most
+  // experiences in practice (LLM kept only the one it actively rewrote).
+  experienceFiles: string[];
+}
+
 /** Concatenates every CV source file for a locale (profile, skills, experiences, ...)
  *  into a single block, frontmatter and all — Josiane already knows how to read
  *  this shape (it's identical to what she reads in a normal editing session). */
-export async function loadCvSource(locale: 'fr' | 'en'): Promise<string> {
+export async function loadCvSource(locale: 'fr' | 'en'): Promise<CvSource> {
   const localeDir = path.join(config.carbonNotesPath, 'cv', locale);
   const topLevelFiles = await readdir(localeDir, { withFileTypes: true });
 
@@ -30,11 +40,12 @@ export async function loadCvSource(locale: 'fr' | 'en'): Promise<string> {
   }
 
   const experiencesDir = path.join(localeDir, 'experiences');
-  const experienceFiles = await readdir(experiencesDir).catch(() => [] as string[]);
-  for (const file of experienceFiles.filter((f) => f.endsWith('.md'))) {
+  const allExperienceEntries = await readdir(experiencesDir).catch(() => [] as string[]);
+  const experienceFiles = allExperienceEntries.filter((f) => f.endsWith('.md'));
+  for (const file of experienceFiles) {
     const content = await readFile(path.join(experiencesDir, file), 'utf-8');
     sections.push(`### cv/${locale}/experiences/${file}\n\n${content}`);
   }
 
-  return sections.join('\n\n---\n\n');
+  return { content: sections.join('\n\n---\n\n'), experienceFiles };
 }
