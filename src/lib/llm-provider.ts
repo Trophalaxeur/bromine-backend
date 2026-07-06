@@ -89,9 +89,14 @@ class AnthropicSDKProvider implements ILLMProvider {
         ]
       : request.userPrompt;
 
-    const response = await this.#client.messages.create({
+    // 8192 was too low: a career-channel rewrite of all 10 real experiences
+    // (see prompt.ts's checklist) plus profile/skills routinely needs more —
+    // observed truncating mid-rewrite after only 4 experiences. Streamed
+    // since >~16000 max_tokens risks an SDK HTTP timeout on a non-streaming
+    // request.
+    const stream = this.#client.messages.stream({
       model: 'claude-opus-4-8',
-      max_tokens: 8192,
+      max_tokens: 32000,
       // 1h TTL (not the 5min default) — Florian iterates on the same base/locale
       // across several regenerations within a session while tweaking
       // instructions, and the system prompt (Josiane + full CV source +
@@ -99,6 +104,14 @@ class AnthropicSDKProvider implements ILLMProvider {
       system: [{ type: 'text', text: request.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }],
       messages: [{ role: 'user', content: userContent }],
     });
+    const response = await stream.finalMessage();
+
+    // A truncated rewrite silently drops whatever experience it was mid-way
+    // through — fail loudly instead of handing response-parser.ts a partial
+    // ## FILE: block it can't reliably parse.
+    if (response.stop_reason === 'max_tokens') {
+      throw new Error(`Anthropic response was truncated at max_tokens (${response.usage.output_tokens} output tokens) — the rewrite is incomplete.`);
+    }
 
     const textBlock = response.content.find((block) => block.type === 'text');
     if (!textBlock || textBlock.type !== 'text') throw new Error('Anthropic response contained no text block');
