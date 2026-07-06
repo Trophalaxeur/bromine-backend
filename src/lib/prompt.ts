@@ -6,6 +6,11 @@ export interface GenerateInput {
   locale: 'fr' | 'en';
   instructions: string;
   hasAttachment: boolean;
+  // Real filenames under cv/<locale>/experiences/ — enumerated below as a
+  // literal checklist rather than left to the LLM's recall of the source
+  // dump further up its context, since that's what let a repositioning
+  // request silently keep only the one experience it actively rewrote.
+  experienceFiles: string[];
 }
 
 /**
@@ -20,6 +25,8 @@ export function buildUserPrompt(input: GenerateInput): string {
 
   const attachmentNote = input.hasAttachment ? '\nAn image is attached (job offer screenshot or similar) — read it as additional context.' : '';
 
+  const experienceChecklist = input.experienceFiles.map((f) => `  - ${input.locale}/experiences/${f}`).join('\n');
+
   return `You are adapting Florian's CV, following your editorial mandate exactly as described in SKILL.md above. Target variant: "${input.base}". Locale: ${input.locale}.
 
 ${nameInstruction}
@@ -30,9 +37,11 @@ ${input.instructions}${attachmentNote}
 Two different kinds of instructions need two different strategies — decide which one this is before touching any file:
 
 - **Targeted to a specific opportunity** (a named job posting, client, or attached offer): curate down to the experiences genuinely relevant to that opportunity, as SKILL.md describes.
-- **A repositioning / emphasis request** (e.g. "put forward the Lead Dev side", "orient this more toward architecture") with no specific opportunity named: this is NOT a request to delete unrelated experiences. Keep every experience from the real cv/${input.locale}/experiences/ directory in its current order — **never reorder the experiences list** (reordering is confusing for Florian and serves no purpose here). Express the requested emphasis by rewriting wording and reordering bullets *within* each experience. For enrichment, consult \`memoire_cv.md\` (already in your context as part of the CV source) to find additional factual actions, metrics, or context that support the requested angle — use it to add or strengthen bullets without inventing anything. Files without \`:::\` variant blocks (e.g. \`summary.md\`, \`domains.md\`) can and should be modified when they help carry the repositioning — there is no multi-variant impact concern for those files. Only drop an experience if Florian's instructions explicitly say to remove it.
+- **A repositioning / emphasis request** (e.g. "put forward the Lead Dev side", "orient this more toward architecture") with no specific opportunity named: this is NOT a request to delete unrelated experiences. The real cv/${input.locale}/experiences/ directory currently contains exactly these ${input.experienceFiles.length} files — treat this as a literal checklist, not a recollection exercise: emit one ## FILE block for EVERY name below (rewritten with the requested emphasis), in this exact order, and do not skip any of them:
+${experienceChecklist}
+  **Never reorder this list** (reordering is confusing for Florian and serves no purpose here). Express the requested emphasis by rewriting wording and reordering bullets *within* each experience, never by dropping one from the checklist. For enrichment, consult \`memoire_cv.md\` (already in your context as part of the CV source) to find additional factual actions, metrics, or context that support the requested angle — use it to add or strengthen bullets without inventing anything. Files without \`:::\` variant blocks (e.g. \`summary.md\`, \`domains.md\`) can and should be modified when they help carry the repositioning — there is no multi-variant impact concern for those files. Only drop an experience if Florian's instructions explicitly say to remove it — the checklist above assumes none are dropped by default.
 
-When in doubt about which kind of request this is, default to keeping all experiences — dropping content is the harder-to-notice mistake.
+When in doubt about which kind of request this is, default to keeping all experiences — dropping content is the harder-to-notice mistake. Before responding, count your own ## FILE: ${input.locale}/experiences/ blocks against the checklist above (for a repositioning request, the counts must match exactly).
 
 Respond with EXACTLY this structure (no extra prose before or after):
 
