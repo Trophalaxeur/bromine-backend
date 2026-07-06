@@ -148,6 +148,15 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
     cwd: config.bismuthBlogPath,
     env: {
       ...process.env,
+      // Vite falls back to NODE_ENV for its dev-vs-build mode when astro dev
+      // doesn't pass --mode explicitly — inheriting bromine-backend's own
+      // NODE_ENV=production here would resolve import.meta.env.DEV to false,
+      // which silently disables both content.config.ts's LOCAL_CARBON_NOTES/
+      // TAILORED_CV_SLUG gating and this route's own getStaticPaths(),
+      // producing a 404 for every single production render regardless of
+      // slug. This subprocess is always a throwaway dev server, so its mode
+      // must not be tied to the parent process's deployment environment.
+      NODE_ENV: 'development',
       TAILORED_CV_SLUG: slug,
       LOCAL_CARBON_NOTES: config.carbonNotesPath,
       CONTENT_TOKEN: config.contentToken ?? '',
