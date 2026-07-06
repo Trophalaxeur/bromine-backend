@@ -60,27 +60,40 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 // before this is trustworthy.
 function waitForAstroServer(child: ChildProcess): Promise<number> {
   return new Promise((resolve, reject) => {
+    // Accumulated across chunks rather than matched per-chunk — stdout is a
+    // stream, so "ready in" or the "http://localhost:PORT" line can land
+    // split across two `data` events and never match if tested in isolation.
+    let buffered = '';
     let port: number | null = null;
     let readyLogged = false;
-    const timeout = setTimeout(() => reject(new Error('astro dev did not become ready in time')), READY_TIMEOUT_MS);
-    const tryResolve = () => {
-      if (port === null || !readyLogged) return;
+
+    const cleanup = () => {
       clearTimeout(timeout);
       child.stdout?.off('data', onData);
+      child.off('error', onError);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('astro dev did not become ready in time'));
+    }, READY_TIMEOUT_MS);
+    const tryResolve = () => {
+      if (port === null || !readyLogged) return;
+      cleanup();
       resolve(port);
     };
     const onData = (chunk: Buffer) => {
-      const text = chunk.toString();
-      if (text.includes('ready in')) readyLogged = true;
-      const match = /https?:\/\/localhost:(\d+)/.exec(text);
+      buffered += chunk.toString();
+      if (buffered.includes('ready in')) readyLogged = true;
+      const match = /https?:\/\/localhost:(\d+)/.exec(buffered);
       if (match) port = Number(match[1]);
       tryResolve();
     };
-    child.stdout?.on('data', onData);
-    child.on('error', (err) => {
-      clearTimeout(timeout);
+    const onError = (err: Error) => {
+      cleanup();
       reject(err);
-    });
+    };
+    child.stdout?.on('data', onData);
+    child.on('error', onError);
   });
 }
 
@@ -91,13 +104,37 @@ function waitForAstroServer(child: ChildProcess): Promise<number> {
 // stale one, silently serving a 404 for the new slug. Spawning detached puts
 // astro in its own process group; killing the negated pid signals the whole
 // group at once.
+const KILL_ESCALATION_DELAY_MS = 3_000;
+
 function killProcessTree(child: ChildProcess): void {
   if (!child.pid) return;
+  const pid = child.pid;
   try {
-    process.kill(-child.pid, 'SIGTERM');
-  } catch {
-    // Group already exited — nothing to clean up.
+    process.kill(-pid, 'SIGTERM');
+  } catch (err) {
+    // ESRCH just means the group is already gone — anything else (e.g.
+    // EPERM) is worth knowing about instead of silently leaving an orphan.
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      console.error(`[pdf] failed to SIGTERM astro process group ${pid}:`, err);
+    }
+    return;
   }
+
+  // Not awaited — a single SIGTERM is enough in the overwhelmingly common
+  // case, and blocking every render's response on this grace period isn't
+  // worth it. Escalates in the background if the group is still alive once
+  // the grace period elapses.
+  setTimeout(() => {
+    try {
+      // Signal 0 only checks liveness — throws ESRCH once the whole group
+      // has exited, which is the expected outcome after a plain SIGTERM.
+      process.kill(-pid, 0);
+      process.kill(-pid, 'SIGKILL');
+      console.error(`[pdf] astro process group ${pid} ignored SIGTERM — sent SIGKILL`);
+    } catch {
+      // Group already exited — SIGTERM was enough.
+    }
+  }, KILL_ESCALATION_DELAY_MS).unref();
 }
 
 async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise<string> {
