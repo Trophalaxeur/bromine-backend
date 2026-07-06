@@ -10,7 +10,7 @@ import { loadCvSource } from '../lib/cv-content.ts';
 import { buildUserPrompt } from '../lib/prompt.ts';
 import { parseGenerationResponse, deriveSections } from '../lib/response-parser.ts';
 import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
-import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession } from '../lib/git.ts';
+import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession, pullContentRepos } from '../lib/git.ts';
 import { renderTailoredPdf, renderCommittedPdf } from '../lib/pdf.ts';
 import { logGeneration } from '../lib/logger.ts';
 import { startProgress, setPhase, setReady, setError, getProgress } from '../lib/progress.ts';
@@ -52,6 +52,12 @@ type GenerateBody = z.infer<typeof generateSchema>;
  *  the LLM call), and the extension polls GET /cv/sessions/:id/progress
  *  instead of holding one long-lived request open. */
 async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody): Promise<void> {
+  // Refresh carbon-notes/bismuth-blog from their remotes before reading anything
+  // from them — the prompt (loadJosiane/loadCvSource below) and the later PDF
+  // render both read the on-disk checkout as-is, which otherwise only gets
+  // updated at process startup. No-op in dev (see pullContentRepos).
+  await pullContentRepos();
+
   const [josiane, cvSource] = await Promise.all([loadJosiane(base), loadCvSource(body.locale)]);
   const systemPrompt = `${josiane}\n\n---\n\n# Current CV source (ground truth — do not invent facts beyond this)\n\n${cvSource}`;
   const userPrompt = buildUserPrompt({
