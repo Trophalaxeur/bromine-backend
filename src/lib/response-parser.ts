@@ -47,6 +47,17 @@ export function parseGenerationResponse(text: string, fallbackName: string): Par
   return { name, files };
 }
 
+/**
+ * Extracts the optional trailing ## NOTES block (the sanctioned place for the model's remarks —
+ * see prompt.ts). Returns undefined when absent or empty. CV markdown never carries a "## NOTES"
+ * heading of its own, so a plain match on the first occurrence is safe here.
+ */
+export function parseNotes(text: string): string | undefined {
+  const match = text.match(/##\s*NOTES\s*\n([\s\S]*)$/i);
+  const notes = match?.[1].trim();
+  return notes || undefined;
+}
+
 function splitFrontmatter(content: string): { frontmatter: string; body: string } {
   const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   return match ? { frontmatter: match[1], body: match[2] } : { frontmatter: '', body: content };

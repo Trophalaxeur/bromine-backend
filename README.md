@@ -101,12 +101,13 @@ Notes:
 | Route | Auth | Description |
 |---|---|---|
 | `GET /health` | none | Healthcheck |
+| `GET /version` | none | Deployed build: `{ version, commit, nodeEnv }` (`version` from `package.json`, `commit` from `git rev-parse --short HEAD` at startup) |
 | `POST /cv/generate` | Bearer (Google id_token) | Starts (or restarts) a draft generation asynchronously — returns `202` with a `sessionId` immediately |
 | `GET /cv/sessions/:id/progress` | Bearer | Polls the phase of an in-flight generation (`calling_llm`, `writing_files`, `rendering_pdf`, `ready`, `error`); once `ready`, includes the copyable sections + PDF URL |
 | `POST /cv/sessions/:id/commit` | Bearer | Commits the draft into carbon-notes (no-op in dev) |
 | `DELETE /cv/sessions/:id` | Bearer | Discards a draft without committing |
 | `GET /cv/sessions/:id/pdf` | Bearer | Downloads the rendered PDF — serves the live draft if `:id` is a sessionId, re-renders (and caches) from `carbon-notes` if it's a committed slug |
-| `GET /cv/sessions/:slug` | Bearer | Reloads a previously-committed session (name + copyable sections + PDF URL) for the "historique" dropdown |
+| `GET /cv/sessions/:slug` | Bearer | Reloads a previously-committed session (name + copyable sections + original `instructions` + generation `report` + PDF URL) for the "historique" dropdown |
 | `GET /cv/sessions` | Bearer | Lists previously committed sessions (from `carbon-notes/cv/tailored/`) |
 
 All protected routes expect `Authorization: Bearer <google-id-token>`, verified per-request against Google's JWKS (no backend-issued JWT — id_tokens are short-lived and the extension re-authenticates silently).

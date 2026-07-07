@@ -8,7 +8,8 @@ import { createLLMProvider } from '../lib/llm-provider.ts';
 import { loadJosiane, type CvBase } from '../lib/josiane.ts';
 import { loadCvSource } from '../lib/cv-content.ts';
 import { buildUserPrompt } from '../lib/prompt.ts';
-import { parseGenerationResponse, deriveSections } from '../lib/response-parser.ts';
+import { parseGenerationResponse, deriveSections, parseNotes } from '../lib/response-parser.ts';
+import type { GenerationReport } from '../lib/generation-report.ts';
 import { upsertDraft, getDraft, deleteDraft } from '../lib/sessions.ts';
 import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession, pullContentRepos } from '../lib/git.ts';
 import { renderTailoredPdf, renderCommittedPdf } from '../lib/pdf.ts';
@@ -88,6 +89,19 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   const sections = deriveSections(parsed.files, base);
   const slug = slugify(parsed.name);
 
+  // An experience the LLM didn't emit falls back to the real cv/<locale>/experiences file at
+  // render time (see bismuth-blog content.config.ts's localCvLoader) — i.e. it's reused as-is,
+  // not dropped. The review/pageCheck fields land with §1/§5; for now the report carries the
+  // call summary + any ## NOTES the model flagged.
+  const rewrittenExperiences = parsed.files.filter((f) => f.relativePath.includes('/experiences/')).map((f) => f.relativePath.split('/').pop() as string);
+  const report: GenerationReport = {
+    callSummary: {
+      experiencesRewritten: rewrittenExperiences,
+      experiencesReused: cvSource.experienceFiles.filter((f) => !rewrittenExperiences.includes(f)),
+    },
+    notes: parseNotes(responseText),
+  };
+
   console.log(`[cv/generate] name=${parsed.name} files=${parsed.files.map((f) => f.relativePath).join(', ')}`);
   await logGeneration({
     base,
@@ -102,7 +116,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   });
 
   setPhase(sessionId, 'writing_files');
-  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files, sections);
+  await writeTailoredFiles({ slug, name: parsed.name, base, locale: body.locale, instructions: body.instructions }, parsed.files, sections, report);
 
   setPhase(sessionId, 'rendering_pdf');
   const pdfPath = await renderTailoredPdf(slug, base, sessionId);
@@ -115,6 +129,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     instructions: body.instructions,
     files: parsed.files,
     sections,
+    report,
     pdfPath,
   });
 
@@ -123,6 +138,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     slug: draft.slug,
     name: draft.name,
     sections: draft.sections,
+    report: draft.report,
     pdf_url: `/cv/sessions/${draft.sessionId}/pdf`,
   });
 }
@@ -198,10 +214,14 @@ cvRoutes.get('/cv/sessions/:slug', async (c) => {
   const committed = await readCommittedSession(slug);
   if (!committed) return c.json({ error: 'Session not found' }, 404);
 
+  // instructions/report are absent on sessions committed before those fields existed — the
+  // extension treats them as optional (undefined → no prefill / no report panel).
   return c.json({
     slug,
     name: committed.name,
     sections: committed.sections,
+    instructions: committed.instructions,
+    report: committed.report,
     pdf_url: `/cv/sessions/${slug}/pdf`,
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { GenerationReport } from './generation-report.ts';
 
 export interface TailoredFile {
   /** Path relative to cv/tailored/<slug>/, e.g. "fr/profile.md" or "fr/experiences/2025-bluewhale.md" */
@@ -21,6 +22,7 @@ export interface Draft {
   instructions: string;
   files: TailoredFile[];
   sections: Section[];
+  report?: GenerationReport;
   pdfPath: string;
   createdAt: number;
 }

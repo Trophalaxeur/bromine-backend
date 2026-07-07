@@ -1,4 +1,5 @@
 import type { Section } from './sessions.ts';
+import type { GenerationReport } from './generation-report.ts';
 
 export type GenerationPhase = 'calling_llm' | 'writing_files' | 'rendering_pdf' | 'ready' | 'error';
 
@@ -7,6 +8,7 @@ export interface GenerationResult {
   slug: string;
   name: string;
   sections: Section[];
+  report?: GenerationReport;
   pdf_url: string;
 }
 

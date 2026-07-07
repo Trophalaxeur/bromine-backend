@@ -43,7 +43,7 @@ ${experienceChecklist}
 
 When in doubt about which kind of request this is, default to keeping all experiences — dropping content is the harder-to-notice mistake. Before responding, count your own ## FILE: ${input.locale}/experiences/ blocks against the checklist above (for a repositioning request, the counts must match exactly).
 
-Respond with EXACTLY this structure (no extra prose before or after):
+Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end — put nothing else outside the blocks below:
 
 ## NAME
 <short name — company + role for a targeted opportunity, or a short label like "Lead Dev repositioning" for a generic repositioning request>
@@ -64,5 +64,8 @@ Some experience files bundle several distinct clients/missions in one file (e.g.
 
 Note on skill categories: the category order (Leadership, Delivery, Quality, Frontend, ...) is fixed site-wide and cannot be changed per-CV — only the item order and bold emphasis within each category are yours to edit.
 
-Do not emit a SECTIONS block — the backend derives copy-paste sections directly from the FILE blocks above.`;
+Do not emit a SECTIONS block — the backend derives copy-paste sections directly from the FILE blocks above.
+
+## NOTES
+<optional, and the ONLY place for remarks: flag anything Florian should know — an ambiguous instruction and how you resolved it, an angle you couldn't support from the CV source, a request you deliberately didn't apply and why. Omit this block entirely if you have nothing to flag. Never put remarks anywhere else — stray prose outside the blocks above is dropped by the parser.>`;
 }
