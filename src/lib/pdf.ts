@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { config } from '../config.ts';
@@ -137,7 +137,28 @@ function killProcessTree(child: ChildProcess): void {
   }, KILL_ESCALATION_DELAY_MS).unref();
 }
 
-async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise<string> {
+export interface RenderResult {
+  path: string;
+  pageCount: number;
+}
+
+export interface RenderOptions {
+  /** Override the layout's @page 15mm margins with a tighter box (page-fit §5 tight_margins step),
+   *  gaining usable area without touching content. Applied via page.pdf() so it needs no template change. */
+  tightMargins?: boolean;
+}
+
+const TIGHT_MARGIN = { top: '8mm', right: '10mm', bottom: '8mm', left: '10mm' };
+
+/** Counts pages in a Chromium-produced PDF without a dependency: the page tree writes its total into
+ *  /Count, and a split tree's root (the total) is the max across all /Count values. */
+export async function countPdfPages(pdfPath: string): Promise<number> {
+  const raw = await readFile(pdfPath, 'latin1');
+  const counts = [...raw.matchAll(/\/Count\s+(\d+)/g)].map((m) => Number(m[1]));
+  return counts.length ? Math.max(...counts) : 1;
+}
+
+async function renderPdf(slug: string, base: CvBase, sessionId: string, opts: RenderOptions = {}): Promise<RenderResult> {
   await mkdir(PDF_CACHE_DIR, { recursive: true });
   const outputPath = path.join(PDF_CACHE_DIR, `${sessionId}.pdf`);
 
@@ -196,7 +217,13 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
       await page.addStyleTag({ content: ".font-satoshi { font-family: 'IBM Plex Sans', sans-serif !important; }" });
       await page.evaluate(() => document.fonts.ready);
       console.log(`[pdf] fonts ready at ${elapsed()}`);
-      await page.pdf({ path: outputPath, printBackground: base === 'detailed', format: 'A4', preferCSSPageSize: true });
+      // preferCSSPageSize honours the layout's @page margins; the tight-margins step instead passes an
+      // explicit (smaller) margin box, which requires dropping preferCSSPageSize so page.pdf's wins.
+      await page.pdf(
+        opts.tightMargins
+          ? { path: outputPath, printBackground: base === 'detailed', format: 'A4', margin: TIGHT_MARGIN }
+          : { path: outputPath, printBackground: base === 'detailed', format: 'A4', preferCSSPageSize: true }
+      );
       console.log(`[pdf] pdf written at ${elapsed()}`);
     } finally {
       await browser.close();
@@ -205,20 +232,25 @@ async function renderPdf(slug: string, base: CvBase, sessionId: string): Promise
     killProcessTree(astroProcess);
   }
 
-  return outputPath;
+  const pageCount = await countPdfPages(outputPath);
+  console.log(`[pdf] ${slug} rendered ${pageCount} page(s)${opts.tightMargins ? ' (tight margins)' : ''}`);
+  return { path: outputPath, pageCount };
 }
 
-export function renderTailoredPdf(slug: string, base: CvBase, sessionId: string): Promise<string> {
-  return enqueue(() => renderPdf(slug, base, sessionId));
+export function renderTailoredPdf(slug: string, base: CvBase, sessionId: string, opts: RenderOptions = {}): Promise<RenderResult> {
+  return enqueue(() => renderPdf(slug, base, sessionId, opts));
 }
 
 /** Committed sessions are immutable (writeTailoredFiles only ever runs once
  *  per slug's content, before commit) — so unlike renderTailoredPdf, a cached
  *  file on disk keyed by slug is always still valid and worth reusing instead
  *  of re-running the astro+Chromium pipeline on every "historique" pick. */
-export async function renderCommittedPdf(slug: string, base: CvBase): Promise<string> {
+export async function renderCommittedPdf(slug: string, base: CvBase, opts: RenderOptions = {}): Promise<string> {
   const cachedPath = path.join(PDF_CACHE_DIR, `${slug}.pdf`);
   const cached = await stat(cachedPath).catch(() => null);
   if (cached) return cachedPath;
-  return enqueue(() => renderPdf(slug, base, slug));
+  // opts carries whether the committed session was fitted with tight margins (from its stored
+  // report), so a cache miss re-renders it the same way it was originally shipped, not looser.
+  const { path: renderedPath } = await enqueue(() => renderPdf(slug, base, slug, opts));
+  return renderedPath;
 }

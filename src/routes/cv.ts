@@ -7,9 +7,9 @@ import { requireAuth } from '../lib/auth-middleware.ts';
 import { createLLMProvider } from '../lib/llm-provider.ts';
 import { loadJosiane, type CvBase } from '../lib/josiane.ts';
 import { loadCvSource, rewritePriorityOf } from '../lib/cv-content.ts';
-import { buildCorePrompt, buildExperiencePrompt, buildReviewPrompt } from '../lib/prompt.ts';
-import { parseCoreResponse, parseExperienceResponse, parseReviewResponse, deriveSections } from '../lib/response-parser.ts';
-import type { GenerationReport, ReviewOutcome } from '../lib/generation-report.ts';
+import { buildCorePrompt, buildExperiencePrompt, buildReviewPrompt, buildCondensePrompt } from '../lib/prompt.ts';
+import { parseCoreResponse, parseExperienceResponse, parseReviewResponse, parseCondenseResponse, deriveSections } from '../lib/response-parser.ts';
+import type { GenerationReport, ReviewOutcome, PageCheckOutcome } from '../lib/generation-report.ts';
 import { runWithLimit } from '../lib/concurrency.ts';
 import { upsertDraft, getDraft, deleteDraft, HISTORY_CAP, type TailoredFile } from '../lib/sessions.ts';
 import { writeTailoredFiles, commitTailoredSession, tailoredDir, readCommittedSession, pullContentRepos } from '../lib/git.ts';
@@ -59,6 +59,8 @@ const REVIEW_MAX_TOKENS = 16000; // may re-emit several full files at once
 // Conservative default — one generation is ever in flight, and typical fan-out is ~4-5 calls.
 // Revisit against the account's real Anthropic tier concurrency limit if it ever bottlenecks.
 const EXPERIENCE_CONCURRENCY = 4;
+// The 'short' CV targets 2 A4 pages (the print layout is tuned for it); other bases are unbounded.
+const SHORT_PAGE_BUDGET = 2;
 
 /** The actual generation pipeline — deliberately NOT awaited by the route
  *  handler below. It can take anywhere from seconds to a few minutes (mostly
@@ -183,7 +185,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     console.error(`[cv/generate] review pass failed, shipping un-reviewed content:`, err);
   }
 
-  const sections = deriveSections(files, base);
+  let sections = deriveSections(files, base);
   const slug = slugify(core.name);
 
   // Aggregate the per-call ## NOTES fragments (the editorial review's own notes live separately
@@ -221,11 +223,85 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     parsedFiles: files.map((f) => f.relativePath),
   });
 
+  const briefInput = { slug, name: core.name, base, locale: body.locale, instructions: body.instructions };
+
   setPhase(sessionId, 'writing_files');
-  await writeTailoredFiles({ slug, name: core.name, base, locale: body.locale, instructions: body.instructions }, files, sections, report, history);
+  await writeTailoredFiles(briefInput, files, sections, report, history);
 
   setPhase(sessionId, 'rendering_pdf');
-  const pdfPath = await renderTailoredPdf(slug, base, sessionId);
+  let render = await renderTailoredPdf(slug, base, sessionId);
+
+  // §5 page-fit: only the 'short' base has a hard budget (SHORT_PAGE_BUDGET pages). Escalate in
+  // order — condense skills, then tighten margins, then condense experiences — re-rendering after
+  // each and stopping as soon as it fits. Each step runs at most once, so this can't loop forever.
+  // Best-effort: a condense/render failure logs and keeps the last good render.
+  if (base === 'short') {
+    const steps: PageCheckOutcome['escalationSteps'] = [];
+    const filesTouched = new Set<string>();
+    let tightMargins = false;
+
+    // Ask the LLM to shorten `subset`; apply only the returned files that already exist (a condense
+    // must never add/drop files) and report which paths it actually rewrote.
+    const condense = async (subset: TailoredFile[], maxTokens: number): Promise<string[]> => {
+      const text = await llm.complete({
+        systemPrompt,
+        userPrompt: buildCondensePrompt({ base, locale: body.locale, files: subset, currentPageCount: render.pageCount, targetPageCount: SHORT_PAGE_BUDGET }),
+        maxTokens,
+      });
+      const known = new Set(files.map((f) => f.relativePath));
+      const applied = parseCondenseResponse(text).filter((f) => known.has(f.relativePath));
+      if (applied.length) {
+        const revised = new Map(applied.map((f) => [f.relativePath, f]));
+        files = files.map((f) => revised.get(f.relativePath) ?? f);
+        sections = deriveSections(files, base);
+      }
+      return applied.map((f) => f.relativePath);
+    };
+    const reRender = async () => {
+      await writeTailoredFiles(briefInput, files, sections, report, history);
+      render = await renderTailoredPdf(slug, base, sessionId, { tightMargins });
+    };
+
+    try {
+      if (render.pageCount > SHORT_PAGE_BUDGET) {
+        const skills = files.filter((f) => f.relativePath.endsWith('/skills.md'));
+        const touched = skills.length ? await condense(skills, CORE_MAX_TOKENS) : [];
+        if (touched.length) {
+          touched.forEach((p) => filesTouched.add(p));
+          steps.push('skills_condense');
+          await reRender();
+        }
+      }
+      if (render.pageCount > SHORT_PAGE_BUDGET) {
+        tightMargins = true;
+        steps.push('tight_margins');
+        render = await renderTailoredPdf(slug, base, sessionId, { tightMargins });
+      }
+      if (render.pageCount > SHORT_PAGE_BUDGET) {
+        const experiences = files.filter((f) => f.relativePath.includes('/experiences/'));
+        const touched = experiences.length ? await condense(experiences, REVIEW_MAX_TOKENS) : [];
+        if (touched.length) {
+          touched.forEach((p) => filesTouched.add(p));
+          steps.push('experience_condense');
+          await reRender();
+        }
+      }
+    } catch (err) {
+      console.error('[cv/generate] page-fit escalation failed, shipping last good render:', err);
+    }
+
+    report.pageCheck = {
+      status: render.pageCount <= SHORT_PAGE_BUDGET ? 'ok' : 'over_budget',
+      finalPageCount: render.pageCount,
+      escalationSteps: steps,
+      filesTouched: filesTouched.size ? [...filesTouched] : undefined,
+    };
+    console.log(`[cv/generate] page-fit: ${report.pageCheck.finalPageCount} page(s), status=${report.pageCheck.status}, steps=[${steps.join(', ')}]`);
+    // Re-persist with the final pageCheck (and any condensed files/sections).
+    await writeTailoredFiles(briefInput, files, sections, report, history);
+  }
+
+  const pdfPath = render.path;
 
   const draft = upsertDraft(sessionId, {
     slug,
@@ -308,7 +384,11 @@ cvRoutes.get('/cv/sessions/:id/pdf', async (c) => {
   const committed = await readCommittedSession(id);
   if (!committed) return c.json({ error: 'Session not found or expired' }, 404);
 
-  const pdfPath = await renderCommittedPdf(id, committed.base);
+  // Re-render the same way it was originally fitted: if the page-fit loop used tight margins, a
+  // cache-miss re-render must too, or a committed 2-page CV would reflow to 3 on reload.
+  const pdfPath = await renderCommittedPdf(id, committed.base, {
+    tightMargins: committed.report?.pageCheck?.escalationSteps.includes('tight_margins') ?? false,
+  });
   const buffer = await readFile(pdfPath);
   return c.body(buffer, 200, { 'Content-Type': 'application/pdf' });
 });

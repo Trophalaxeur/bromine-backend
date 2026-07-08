@@ -102,7 +102,7 @@ Notes:
 |---|---|---|
 | `GET /health` | none | Healthcheck |
 | `GET /version` | none | Deployed build: `{ version, commit, nodeEnv }` (`version` from `package.json`, `commit` from `git rev-parse --short HEAD` at startup) |
-| `POST /cv/generate` | Bearer (Google id_token) | Starts (or restarts) a draft generation asynchronously — returns `202` with a `sessionId` immediately |
+| `POST /cv/generate` | Bearer (Google id_token) | Starts (or restarts) a draft generation asynchronously — returns `202` with a `sessionId` immediately. The `short` base is auto-fitted to 2 A4 pages (condense skills → tighter margins → condense experiences, recorded in `report.pageCheck`) |
 | `GET /cv/sessions/:id/progress` | Bearer | Polls the phase of an in-flight generation (`calling_llm`, `writing_files`, `rendering_pdf`, `ready`, `error`); once `ready`, includes the copyable sections + PDF URL |
 | `POST /cv/sessions/:id/commit` | Bearer | Commits the draft into carbon-notes (no-op in dev) |
 | `DELETE /cv/sessions/:id` | Bearer | Discards a draft without committing |
