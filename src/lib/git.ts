@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from '../config.ts';
@@ -98,8 +98,12 @@ export async function writeTailoredFiles(
 
   // notes.md is the human-readable companion — prose reads far better out of a committed .md than
   // out of JSON. Only written when the model actually flagged something.
+  // Regeneration reuses the same slug/dir: if this attempt has no notes, drop any notes.md left by a
+  // prior attempt so the committed dir never carries stale prose that doesn't match the current report.
   const notesMarkdown = buildNotesMarkdown(input.slug, report);
-  if (notesMarkdown) await writeFile(path.join(dir, 'notes.md'), notesMarkdown, 'utf-8');
+  const notesPath = path.join(dir, 'notes.md');
+  if (notesMarkdown) await writeFile(notesPath, notesMarkdown, 'utf-8');
+  else await rm(notesPath, { force: true });
 
   for (const file of files) {
     const dest = path.join(dir, file.relativePath);

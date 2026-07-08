@@ -190,7 +190,10 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   // in report.review.notes so the front can distinguish generation remarks from review remarks).
   const noteFragments: string[] = [];
   if (core.notes) noteFragments.push(`**core**: ${core.notes}`);
-  for (const r of experienceResults) if (r.notes) noteFragments.push(`**${r.file.relativePath}**: ${r.notes}`);
+  // Label by the requested filename (runWithLimit preserves toRewrite's order), NOT r.file.relativePath:
+  // that path is model-emitted and can be wrong, even though the file itself is written to the canonical
+  // toRewrite location — see the experienceByName keying above.
+  experienceResults.forEach((r, i) => { if (r.notes) noteFragments.push(`**${toRewrite[i]}**: ${r.notes}`); });
 
   const report: GenerationReport = {
     callSummary: { experiencesRewritten: toRewrite, experiencesReused: toReuse },
