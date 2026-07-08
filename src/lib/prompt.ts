@@ -32,6 +32,9 @@ export interface ReviewPromptInput {
   instructions: string;
   /** The full assembled set of tailored files to review. */
   files: TailoredFile[];
+  /** The core call's transcription of the attached image (## ATTACHMENT_CONTEXT), so the reviewer
+   *  can judge whether the emphasis actually matches the offer — it never sees the image itself. */
+  attachmentContext?: string;
 }
 
 function attachmentNote(hasAttachment: boolean): string {
@@ -140,7 +143,7 @@ export function buildReviewPrompt(input: ReviewPromptInput): string {
   return `You are the editorial reviewer for a CV that was just assembled from several INDEPENDENT tailoring calls (one for the core identity, one per experience). Because they ran without seeing each other's output, review the whole set for consistency. Follow your editorial mandate in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
 
 Original instructions from Florian:
-${input.instructions}
+${input.instructions}${attachmentContextNote(input.attachmentContext)}
 
 Check specifically for:
 - Coherence between ${locale}/skills.md's emphasis and what the experiences (freshly rewritten AND reused-as-is) actually foreground.
