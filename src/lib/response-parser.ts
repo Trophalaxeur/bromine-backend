@@ -48,6 +48,7 @@ export interface ParsedCore {
   name: string;
   files: TailoredFile[]; // profile/skills/summary/domains
   alsoRewrite: string[]; // bare experience filenames the core call promoted to a full rewrite
+  attachmentContext?: string; // image transcribed to text by the core call, fed to the experience fan-out
   notes?: string;
 }
 
@@ -59,7 +60,7 @@ export function parseCoreResponse(text: string, fallbackName: string): ParsedCor
   if (files.length === 0) {
     throw new Error('Core generation response contained no ## FILE: blocks (expected at least profile.md)');
   }
-  return { name, files, alsoRewrite: parseAlsoRewrite(text), notes: parseNotes(text) };
+  return { name, files, alsoRewrite: parseAlsoRewrite(text), attachmentContext: parseAttachmentContext(text), notes: parseNotes(text) };
 }
 
 export interface ParsedExperience {
@@ -99,6 +100,15 @@ function parseAlsoRewrite(text: string): string[] {
     .map((line) => line.replace(/^[-*\s]+/, '').trim())
     .filter((line) => /\.md$/.test(line))
     .map((line) => line.split('/').pop() as string);
+}
+
+/** Extracts the optional ## ATTACHMENT_CONTEXT block — the core call's text transcription of the
+ *  attached image, which the parallel experience calls read in place of the image itself. Stops at
+ *  the next ## heading so it never swallows the trailing ## NOTES. Returns undefined when absent. */
+function parseAttachmentContext(text: string): string | undefined {
+  const match = text.match(/##\s*ATTACHMENT_CONTEXT\s*\n([\s\S]*?)(?=\n##\s|$)/i);
+  const context = match?.[1].trim();
+  return context || undefined;
 }
 
 /**

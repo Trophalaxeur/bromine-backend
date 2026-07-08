@@ -1,7 +1,9 @@
 /** Runs `tasks` with at most `limit` in flight at once, preserving input→output order.
- *  Rejects as soon as any task throws (Promise.all semantics): the rejection propagates
- *  immediately — already-running tasks are NOT awaited, they keep running un-awaited and their
- *  eventual results/errors are discarded. Use only when a single failure should abort the batch. */
+ *  Rejects as soon as any task throws (Promise.all semantics): the first rejection is what the
+ *  caller sees and the batch is failed from that point. The other in-flight workers are NOT
+ *  cancelled — they run to completion and their results (and any later errors) are discarded, but
+ *  Promise.all still tracks them, so those errors never surface as unhandled rejections.
+ *  Use only when a single failure should abort the batch. */
 export async function runWithLimit<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
   const results = new Array<T>(tasks.length);
   let next = 0;

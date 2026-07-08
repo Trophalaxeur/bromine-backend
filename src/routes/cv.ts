@@ -124,7 +124,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
       const start = Date.now();
       const text = await llm.complete({
         systemPrompt,
-        userPrompt: buildExperiencePrompt({ base, locale: body.locale, instructions: body.instructions, hasAttachment, experienceFile: file }),
+        userPrompt: buildExperiencePrompt({ base, locale: body.locale, instructions: body.instructions, attachmentContext: core.attachmentContext, experienceFile: file }),
         maxTokens: EXPERIENCE_MAX_TOKENS,
       });
       console.log(`[cv/generate] experience ${file} took ${Date.now() - start}ms`);

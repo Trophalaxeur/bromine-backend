@@ -3,9 +3,9 @@
  * the front) and committed alongside the tailored CV for traceability. Assembled in one place
  * (runGeneration) from the pieces each stage produces; §3 of the CV-generation plan.
  *
- * In PR1 only `callSummary` (trivially, since generation is still one call) and `notes` are
- * populated; `review` and `pageCheck` are filled in once the parallel fan-out (§1) and page-fit
- * loop (§5) land. The shape is defined in full now so downstream consumers don't churn later.
+ * In PR1 `callSummary`, `notes`, and `review` are populated — the core+experience fan-out (§1) and
+ * its editorial review pass both land in this PR. Only `pageCheck` is still deferred, filled in once
+ * the page-fit loop (§5) lands. The shape is defined in full now so downstream consumers don't churn later.
  */
 
 export interface CallSummary {
@@ -32,6 +32,6 @@ export interface PageCheckOutcome {
 export interface GenerationReport {
   callSummary: CallSummary;
   notes?: string; // aggregated per-call ## NOTES fragments
-  review?: ReviewOutcome; // §1's editorial pass — absent until that lands
+  review?: ReviewOutcome; // §1's editorial pass — best-effort, so absent when the review step is skipped or fails
   pageCheck?: PageCheckOutcome; // §5, 'short' base only — absent until that lands
 }

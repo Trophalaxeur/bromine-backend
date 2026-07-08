@@ -5,11 +5,12 @@ interface CommonInput {
   base: CvBase;
   locale: 'fr' | 'en';
   instructions: string;
-  hasAttachment: boolean;
 }
 
 export interface CorePromptInput extends CommonInput {
   name?: string;
+  // Only the core call receives the actual image, so only it needs this flag.
+  hasAttachment: boolean;
   // Experiences always rewritten (their own calls run regardless of this prompt).
   priorityFiles: string[];
   // Experiences reused as-is by default — the core call may promote some into ## ALSO_REWRITE.
@@ -19,6 +20,10 @@ export interface CorePromptInput extends CommonInput {
 export interface ExperiencePromptInput extends CommonInput {
   /** Bare filename under cv/<locale>/experiences/, e.g. "2025-bluewhale.md". */
   experienceFile: string;
+  /** Text the core call transcribed from the attached image (job offer etc.) via ## ATTACHMENT_CONTEXT.
+   *  The per-experience calls run in parallel and never receive the image itself, so this is how its
+   *  content reaches them. Undefined when no image was attached. */
+  attachmentContext?: string;
 }
 
 export interface ReviewPromptInput {
@@ -31,6 +36,11 @@ export interface ReviewPromptInput {
 
 function attachmentNote(hasAttachment: boolean): string {
   return hasAttachment ? '\nAn image is attached (job offer screenshot or similar) — read it as additional context.' : '';
+}
+
+// The per-experience calls never receive the image, only the text the core call transcribed from it.
+function attachmentContextNote(context?: string): string {
+  return context ? `\n\nContext from an image Florian attached (job offer screenshot or similar), transcribed by the core call:\n${context}` : '';
 }
 
 const NOTES_CONTRACT = `## NOTES
@@ -84,7 +94,10 @@ Respond with EXACTLY this structure. The only place free-form prose is allowed i
 
 ## ALSO_REWRITE
 <zero or more of the reused-as-is experience filenames listed above, one bare filename per line (e.g. 2011-inria.md), that THIS request warrants rewriting. Omit this whole block if none.>
-
+${input.hasAttachment ? `
+## ATTACHMENT_CONTEXT
+<faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit this block only if there is genuinely nothing in the image.>
+` : ''}
 ${NOTES_CONTRACT}`;
 }
 
@@ -99,7 +112,7 @@ export function buildExperiencePrompt(input: ExperiencePromptInput): string {
   return `You are adapting Florian's CV, following your editorial mandate exactly as described in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
 
 Instructions from Florian:
-${input.instructions}${attachmentNote(input.hasAttachment)}
+${input.instructions}${attachmentContextNote(input.attachmentContext)}
 
 In THIS call you tailor exactly ONE experience: cv/${locale}/experiences/${experienceFile}. Its current content is in your context (the CV source above). Rewrite it to carry the request's emphasis — reorder and reword bullets *within* the experience, and strengthen with facts from \`memoire_cv.md\` where they support the angle; never invent. Do NOT drop the experience and do NOT touch any other file.
 
