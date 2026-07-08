@@ -32,7 +32,13 @@ function extractFileBlocks(text: string): TailoredFile[] {
     const relativePath = match[1].trim();
     const normalized = path.posix.normalize(relativePath);
     const looksLikeDirectory = normalized === '.' || normalized.endsWith('/');
-    if (relativePath.includes('\\') || looksLikeDirectory || path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
+    // Inspect the RAW segments before normalize collapses them: `fr/../.git/config` normalizes to
+    // `.git/config`, which then slips past the `..`/absolute checks and writes a dotfile into the
+    // session tree. Reject any parent segment (`..`) or dot-leading segment (`.git`, `.env`, ...) —
+    // no real CV file uses either — so a mid-path traversal can't be laundered by normalization.
+    const rawSegments = relativePath.split('/');
+    const hasUnsafeSegment = rawSegments.some((seg) => seg === '..' || seg.startsWith('.'));
+    if (relativePath.includes('\\') || hasUnsafeSegment || looksLikeDirectory || path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
       throw new Error(`LLM response FILE block has an invalid path: "${relativePath}"`);
     }
     if (RESERVED_TAILORED_FILES.has(path.posix.basename(normalized))) {
@@ -78,16 +84,18 @@ export function parseExperienceResponse(text: string): ParsedExperience {
   return { file: files[0], notes: parseNotes(text) };
 }
 
-export type ParsedReview = { changed: false } | { changed: true; files: TailoredFile[]; notes?: string };
+export type ParsedReview = { changed: false; notes?: string } | { changed: true; files: TailoredFile[]; notes?: string };
 
 /** Parses the editorial review call (buildReviewPrompt). Only applies changes when the model
  *  explicitly says `## REVIEW: CHANGES` and emits at least one revised FILE block — an OK verdict
- *  or a malformed response leaves the assembled content untouched. */
+ *  or a malformed response leaves the assembled content untouched. The trailing ## NOTES are
+ *  returned in every case (the prompt allows notes even on an OK verdict) for traceability. */
 export function parseReviewResponse(text: string): ParsedReview {
-  if (!/##\s*REVIEW:\s*CHANGES/i.test(text)) return { changed: false };
+  const notes = parseNotes(text);
+  if (!/##\s*REVIEW:\s*CHANGES/i.test(text)) return { changed: false, notes };
   const files = extractFileBlocks(text);
-  if (files.length === 0) return { changed: false };
-  return { changed: true, files, notes: parseNotes(text) };
+  if (files.length === 0) return { changed: false, notes };
+  return { changed: true, files, notes };
 }
 
 /** Extracts the ## ALSO_REWRITE list as bare experience filenames (strips list markers and any

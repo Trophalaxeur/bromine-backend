@@ -154,7 +154,9 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   //    render reflects the reviewed content. Best-effort: the assembled set is already complete
   //    and valid, so a review failure (API error after retries, truncation, malformed output) is
   //    logged and skipped rather than sinking an otherwise-good generation.
-  let reviewOutcome: ReviewOutcome = { changed: false };
+  // Left undefined when the review call fails: report.review is then omitted, so consumers can
+  // distinguish "review ran, no change" ({ changed: false }) from "review skipped" (absent).
+  let reviewOutcome: ReviewOutcome | undefined;
   let reviewText = '';
   try {
     const reviewStart = Date.now();
@@ -166,11 +168,16 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     console.log(`[cv/generate] review call took ${Date.now() - reviewStart}ms`);
     const review = parseReviewResponse(reviewText);
     if (review.changed) {
-      const revised = new Map(review.files.map((f) => [f.relativePath, f]));
-      files = files.map((f) => revised.get(f.relativePath) ?? f);
+      // Only revise files already in the assembled set — the reviewer must NOT introduce new files
+      // into the tailored tree (surprising, and widens the blast radius of prompt injection).
+      // Reviewer-emitted paths that match nothing are dropped.
       const known = new Set(files.map((f) => f.relativePath));
-      for (const rf of review.files) if (!known.has(rf.relativePath)) files.push(rf);
-      reviewOutcome = { changed: true, filesChanged: review.files.map((f) => f.relativePath), notes: review.notes };
+      const revised = new Map(review.files.filter((f) => known.has(f.relativePath)).map((f) => [f.relativePath, f]));
+      files = files.map((f) => revised.get(f.relativePath) ?? f);
+      const filesChanged = [...revised.keys()];
+      reviewOutcome = { changed: filesChanged.length > 0, filesChanged: filesChanged.length ? filesChanged : undefined, notes: review.notes };
+    } else {
+      reviewOutcome = { changed: false, notes: review.notes };
     }
   } catch (err) {
     console.error(`[cv/generate] review pass failed, shipping un-reviewed content:`, err);
@@ -197,7 +204,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   const history = [...(getDraft(sessionId)?.history ?? []), { instructions: body.instructions, name: core.name, timestamp: Date.now(), report }].slice(-HISTORY_CAP);
 
   console.log(
-    `[cv/generate] name=${core.name} rewritten=[${toRewrite.join(', ')}] reused=${toReuse.length} reviewChanged=${reviewOutcome.changed} files=${files.map((f) => f.relativePath).join(', ')}`
+    `[cv/generate] name=${core.name} rewritten=[${toRewrite.join(', ')}] reused=${toReuse.length} reviewChanged=${reviewOutcome?.changed ?? 'skipped'} files=${files.map((f) => f.relativePath).join(', ')}`
   );
   await logGeneration({
     base,
