@@ -83,7 +83,7 @@ If — and only if — this specific request makes one of those reused experienc
 
 Emphasis strategy, decided from the instructions: for a targeted opportunity, foreground what's relevant to it; for a repositioning/emphasis request, reorient wording toward the requested angle. Either way no experience is dropped. For enrichment, consult \`memoire_cv.md\` (already in your context) for factual actions, metrics, or context supporting the angle — strengthen without inventing.
 
-Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end:
+Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block, which comes ${input.hasAttachment ? 'just before the final ## ATTACHMENT_CONTEXT block' : 'at the very end'}:
 
 ## NAME
 <short name — company + role for a targeted opportunity, or a short label like "Lead Dev repositioning" for a generic repositioning request>
@@ -101,7 +101,7 @@ Respond with EXACTLY this structure. The only place free-form prose is allowed i
 ${NOTES_CONTRACT}${input.hasAttachment ? `
 
 ## ATTACHMENT_CONTEXT
-This block MUST be the very last thing in your response: everything from the line below to the end of your response is treated as the image transcription. Faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit the whole block if there is genuinely nothing in the image.` : ''}`;
+This block MUST be the very last thing in your response — the ## NOTES block, if you emit one, comes BEFORE it. Everything from the line below to the end of your response is treated as the image transcription. Faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit the whole block if there is genuinely nothing in the image.` : ''}`;
 }
 
 /**

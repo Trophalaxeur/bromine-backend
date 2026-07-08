@@ -118,17 +118,23 @@ function parseAlsoRewrite(text: string): string[] {
 /**
  * Splits the core call's optional ## ATTACHMENT_CONTEXT block off the rest of the response — the
  * transcription of the attached image, fed to the parallel experience calls in place of the image.
- * The contract makes it the trailing block, so everything from the heading to EOF is the transcription
- * and is stripped wholesale: this is robust to ANY content inside it (a `## FILE:`/`## NOTES` heading,
- * a stray ``` fence), none of which can then leak into the harvesting parsers (extractFileBlocks/
- * parseNotes/...). That matters because the transcription is the one attacker-influenceable part of
- * the response (a job-offer screenshot). Returns the text unchanged with no context when absent.
+ * The contract makes it the trailing top-level block, so everything from the heading to EOF is the
+ * transcription and is stripped wholesale: robust to ANY content inside it (a `## FILE:`/`## NOTES`
+ * heading, a stray ``` fence), none of which can then leak into the harvesting parsers.
+ *
+ * Only a heading that sits OUTSIDE a ``` fence is treated as the delimiter — an even number of ```
+ * fences before it means top level. A literal "## ATTACHMENT_CONTEXT" inside a ## FILE block's
+ * markdown is therefore skipped (odd fence count), not mistaken for the delimiter (which would
+ * otherwise truncate the response and drop legitimate FILE blocks). Absent → text unchanged.
  */
 function extractAttachmentContext(text: string): { attachmentContext?: string; rest: string } {
-  const match = text.match(/##\s*ATTACHMENT_CONTEXT\s*\n([\s\S]*)$/i);
-  if (match?.index === undefined) return { rest: text };
-  const attachmentContext = match[1].trim() || undefined;
-  return { attachmentContext, rest: text.slice(0, match.index) };
+  for (const m of text.matchAll(/^##[ \t]*ATTACHMENT_CONTEXT[ \t]*$/gim)) {
+    const before = text.slice(0, m.index);
+    if ((before.match(/```/g)?.length ?? 0) % 2 !== 0) continue; // inside a fenced block — not the delimiter
+    const attachmentContext = text.slice(m.index + m[0].length).replace(/^\n/, '').trim() || undefined;
+    return { attachmentContext, rest: before };
+  }
+  return { rest: text };
 }
 
 /**

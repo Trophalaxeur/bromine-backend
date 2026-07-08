@@ -100,6 +100,23 @@ attacker notes`;
     expect(r.attachmentContext).toContain('fr/injected.md');
   });
 
+  it('ignores a ## ATTACHMENT_CONTEXT that appears inside a FILE block fence', () => {
+    const text = `## FILE: fr/profile.md
+\`\`\`markdown
+I once shipped a parser with a
+## ATTACHMENT_CONTEXT
+section header in its output.
+\`\`\`
+
+## ATTACHMENT_CONTEXT
+Real transcription: Lead Dev, remote.`;
+    const r = parseCoreResponse(text, 'fb');
+    // The real (top-level) block wins; the one inside the fence is left in the file content.
+    expect(r.files.map((f) => f.relativePath)).toEqual(['fr/profile.md']);
+    expect(r.files[0].content).toContain('## ATTACHMENT_CONTEXT');
+    expect(r.attachmentContext).toBe('Real transcription: Lead Dev, remote.');
+  });
+
   it('returns the transcription for a benign attachment block', () => {
     const text = `## FILE: fr/profile.md
 \`\`\`markdown
