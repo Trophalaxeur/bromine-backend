@@ -1,71 +1,153 @@
 import type { CvBase } from './josiane.ts';
+import type { TailoredFile } from './sessions.ts';
 
-export interface GenerateInput {
-  name?: string;
+interface CommonInput {
   base: CvBase;
   locale: 'fr' | 'en';
   instructions: string;
   hasAttachment: boolean;
-  // Real filenames under cv/<locale>/experiences/ — enumerated below as a
-  // literal checklist rather than left to the LLM's recall of the source
-  // dump further up its context, since that's what let a repositioning
-  // request silently keep only the one experience it actively rewrote.
-  experienceFiles: string[];
 }
 
+export interface CorePromptInput extends CommonInput {
+  name?: string;
+  // Experiences always rewritten (their own calls run regardless of this prompt).
+  priorityFiles: string[];
+  // Experiences reused as-is by default — the core call may promote some into ## ALSO_REWRITE.
+  otherFiles: string[];
+}
+
+export interface ExperiencePromptInput extends CommonInput {
+  /** Bare filename under cv/<locale>/experiences/, e.g. "2025-bluewhale.md". */
+  experienceFile: string;
+}
+
+export interface ReviewPromptInput {
+  base: CvBase;
+  locale: 'fr' | 'en';
+  instructions: string;
+  /** The full assembled set of tailored files to review. */
+  files: TailoredFile[];
+}
+
+function attachmentNote(hasAttachment: boolean): string {
+  return hasAttachment ? '\nAn image is attached (job offer screenshot or similar) — read it as additional context.' : '';
+}
+
+const NOTES_CONTRACT = `## NOTES
+<optional, and the ONLY place for free-form remarks: flag anything Florian should know — an ambiguous instruction and how you resolved it, an angle you couldn't support from the CV source, a request you deliberately didn't apply and why. Omit this block entirely if you have nothing to flag. Never put remarks anywhere else — stray prose outside the blocks above is dropped by the parser.>`;
+
 /**
- * The dynamic (non-cached) part of the prompt. Josiane's SKILL.md defines the
- * editorial contract; this adds the machine-parseable output contract the
- * backend needs on top, without touching the skill file in carbon-notes.
+ * Core-identity call: NAME + profile/skills/summary/domains. Experiences are tailored in
+ * separate parallel calls, so this prompt emits NO experience FILE blocks — but it does decide,
+ * via ## ALSO_REWRITE, whether any normally-reused experience warrants a rewrite for this request.
+ *
+ * Josiane's SKILL.md (in the cached system prompt) defines the editorial mandate; this adds only
+ * the machine-parseable output contract on top, without touching the skill file in carbon-notes.
  */
-export function buildUserPrompt(input: GenerateInput): string {
+export function buildCorePrompt(input: CorePromptInput): string {
+  const { base, locale } = input;
   const nameInstruction = input.name
     ? `The application name is: "${input.name}".`
     : 'No name was given — deduce a short name (company + role, or context) from the instructions below and put it in the NAME block.';
 
-  const attachmentNote = input.hasAttachment ? '\nAn image is attached (job offer screenshot or similar) — read it as additional context.' : '';
+  const priorityList = input.priorityFiles.map((f) => `  - ${f}`).join('\n') || '  (none)';
+  const otherList = input.otherFiles.map((f) => `  - ${f}`).join('\n') || '  (none)';
 
-  const experienceChecklist = input.experienceFiles.map((f) => `  - ${input.locale}/experiences/${f}`).join('\n');
-
-  return `You are adapting Florian's CV, following your editorial mandate exactly as described in SKILL.md above. Target variant: "${input.base}". Locale: ${input.locale}.
+  return `You are adapting Florian's CV, following your editorial mandate exactly as described in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
 
 ${nameInstruction}
 
 Instructions from Florian:
-${input.instructions}${attachmentNote}
+${input.instructions}${attachmentNote(input.hasAttachment)}
 
-Two different kinds of instructions need two different strategies — decide which one this is before touching any file:
+In THIS call you handle the CV's core identity only: the NAME, ${locale}/profile.md, and the cross-cutting sections ${locale}/skills.md, ${locale}/summary.md, ${locale}/domains.md. The individual work experiences are tailored in SEPARATE parallel calls — do NOT emit any ## FILE block for ${locale}/experiences/* here.
 
-- **Targeted to a specific opportunity** (a named job posting, client, or attached offer): curate down to the experiences genuinely relevant to that opportunity, as SKILL.md describes.
-- **A repositioning / emphasis request** (e.g. "put forward the Lead Dev side", "orient this more toward architecture") with no specific opportunity named: this is NOT a request to delete unrelated experiences. The real cv/${input.locale}/experiences/ directory currently contains exactly these ${input.experienceFiles.length} files — treat this as a literal checklist, not a recollection exercise: emit one ## FILE block for EVERY name below (rewritten with the requested emphasis), in this exact order, and do not skip any of them:
-${experienceChecklist}
-  **Never reorder this list** (reordering is confusing for Florian and serves no purpose here). Express the requested emphasis by rewriting wording and reordering bullets *within* each experience, never by dropping one from the checklist. For enrichment, consult \`memoire_cv.md\` (already in your context as part of the CV source) to find additional factual actions, metrics, or context that support the requested angle — use it to add or strengthen bullets without inventing anything. Files without \`:::\` variant blocks (e.g. \`summary.md\`, \`domains.md\`) can and should be modified when they help carry the repositioning — there is no multi-variant impact concern for those files. Only drop an experience if Florian's instructions explicitly say to remove it — the checklist above assumes none are dropped by default.
+Every experience is always kept in the CV — nothing is ever dropped; this is about emphasis, not curation. These experiences are always rewritten by the other calls regardless of what you do:
+${priorityList}
+These are reused as-is by default (no rewrite):
+${otherList}
+If — and only if — this specific request makes one of those reused experiences genuinely worth a full rewrite (e.g. a posting squarely about applied research would warrant rewriting the INRIA experience), list its bare filename in the ## ALSO_REWRITE block so it gets its own tailoring call. Otherwise leave that block out.
 
-When in doubt about which kind of request this is, default to keeping all experiences — dropping content is the harder-to-notice mistake. Before responding, count your own ## FILE: ${input.locale}/experiences/ blocks against the checklist above (for a repositioning request, the counts must match exactly).
+Emphasis strategy, decided from the instructions: for a targeted opportunity, foreground what's relevant to it; for a repositioning/emphasis request, reorient wording toward the requested angle. Either way no experience is dropped. For enrichment, consult \`memoire_cv.md\` (already in your context) for factual actions, metrics, or context supporting the angle — strengthen without inventing.
 
-Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end — put nothing else outside the blocks below:
+Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end:
 
 ## NAME
 <short name — company + role for a targeted opportunity, or a short label like "Lead Dev repositioning" for a generic repositioning request>
 
-## FILE: ${input.locale}/profile.md
+## FILE: ${locale}/profile.md
 \`\`\`markdown
-<full file content: YAML frontmatter identical in shape to the real cv/${input.locale}/profile.md, then the body with the :::${input.base}::: block (and other variant blocks if you also drafted them)>
+<the full file: YAML frontmatter as in the real cv/${locale}/profile.md, then the body with its variant blocks — the :::${base}::: block rewritten for the emphasis, any other variant blocks preserved from the source>
 \`\`\`
 
-## FILE: ${input.locale}/experiences/<matching-filename>.md
+(Also emit a ## FILE block for ${locale}/skills.md, ${locale}/summary.md, and/or ${locale}/domains.md whenever they help carry the emphasis: for skills.md reorder each category's item list and adjust which items are **bold** — bold renders as primary — to foreground what was asked. The skill category ORDER (Leadership, Delivery, Quality, Frontend, ...) is fixed site-wide and cannot change per-CV. Omit a core file entirely only when the request calls for no change to it — it then falls back to the real CV.)
+
+## ALSO_REWRITE
+<zero or more of the reused-as-is experience filenames listed above, one bare filename per line (e.g. 2011-inria.md), that THIS request warrants rewriting. Omit this whole block if none.>
+
+${NOTES_CONTRACT}`;
+}
+
+/**
+ * Single-experience call: tailors exactly one cv/<locale>/experiences/ file. The file's current
+ * content is in the cached system prompt (full CV source). Emits the full file — same shape as
+ * the source, including all variant blocks — so the tailored slug renders identically to today.
+ */
+export function buildExperiencePrompt(input: ExperiencePromptInput): string {
+  const { base, locale, experienceFile } = input;
+
+  return `You are adapting Florian's CV, following your editorial mandate exactly as described in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
+
+Instructions from Florian:
+${input.instructions}${attachmentNote(input.hasAttachment)}
+
+In THIS call you tailor exactly ONE experience: cv/${locale}/experiences/${experienceFile}. Its current content is in your context (the CV source above). Rewrite it to carry the request's emphasis — reorder and reword bullets *within* the experience, and strengthen with facts from \`memoire_cv.md\` where they support the angle; never invent. Do NOT drop the experience and do NOT touch any other file.
+
+If this file bundles several distinct clients/missions (some do — e.g. a freelance-consulting file covering multiple short missions), keep every mission present and apply the emphasis within each.
+
+Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end:
+
+## FILE: ${locale}/experiences/${experienceFile}
 \`\`\`markdown
-<one such block PER experience you chose to include — see the two strategies above for which experiences that means — reusing the exact filename from the real cv/${input.locale}/experiences/ directory>
+<the full file: the exact frontmatter shape of the real file, then the body with its variant blocks (:::short:::, :::career-channel:::, :::detailed::: as present in the source), with the :::${base}::: block rewritten for the emphasis and the other blocks preserved from the source>
 \`\`\`
 
-(repeat the ## FILE block for every file you are tailoring — profile.md, the experiences per the strategy above, and skills.md whenever the instructions ask to reorient/emphasize a particular angle: reorder each category's item list and adjust which items are wrapped in **bold** — bold items render as highlighted/primary — to foreground what was asked for. Omit skills.md, education.md etc. only when the instructions don't call for any change to them.)
+${NOTES_CONTRACT}`;
+}
 
-Some experience files bundle several distinct clients/missions in one file (e.g. a freelance-consulting file covering 3 short missions for 3 different clients, each with its own bullet in :::short::: and its own subsection in :::career-channel:::/:::detailed:::). If an instruction names a specific client or mission rather than a whole experience, that mission is almost always inside one of these bundled files, not its own file — grep the real experiences/ content for the name before concluding it doesn't exist. Apply the instruction by editing that file's content (drop or keep the matching bullet/subsection in every variant block it appears in), not by including or excluding the file wholesale.
+/**
+ * Editorial review call: runs once over the full assembled set (all core + experience files),
+ * closing the coherence/consistency/anti-hallucination gap that splitting generation into
+ * independent parallel calls opens up. This is the enforcement point for "no unsourced claims".
+ */
+export function buildReviewPrompt(input: ReviewPromptInput): string {
+  const { base, locale } = input;
+  const fileBlocks = input.files.map((f) => `## FILE: ${f.relativePath}\n\`\`\`markdown\n${f.content}\n\`\`\``).join('\n\n');
 
-Note on skill categories: the category order (Leadership, Delivery, Quality, Frontend, ...) is fixed site-wide and cannot be changed per-CV — only the item order and bold emphasis within each category are yours to edit.
+  return `You are the editorial reviewer for a CV that was just assembled from several INDEPENDENT tailoring calls (one for the core identity, one per experience). Because they ran without seeing each other's output, review the whole set for consistency. Follow your editorial mandate in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
 
-Do not emit a SECTIONS block — the backend derives copy-paste sections directly from the FILE blocks above.
+Original instructions from Florian:
+${input.instructions}
 
-## NOTES
-<optional, and the ONLY place for remarks: flag anything Florian should know — an ambiguous instruction and how you resolved it, an angle you couldn't support from the CV source, a request you deliberately didn't apply and why. Omit this block entirely if you have nothing to flag. Never put remarks anywhere else — stray prose outside the blocks above is dropped by the parser.>`;
+Check specifically for:
+- Coherence between ${locale}/skills.md's emphasis and what the experiences (freshly rewritten AND reused-as-is) actually foreground.
+- Tone/style consistency across files, since they were drafted independently.
+- Whether SKILL.md's editorial mandate was actually followed.
+- ANTI-HALLUCINATION (hard requirement): every claim in a rewritten file must be traceable to a specific sentence in the CV source or \`memoire_cv.md\` (both in your context above). Rewrite or REMOVE anything you cannot trace — do not merely flag it — and say what you pulled and why in ## NOTES.
+
+The assembled tailored files:
+
+${fileBlocks}
+
+Respond with EXACTLY one of these two shapes and nothing else:
+
+## REVIEW: OK
+
+— or —
+
+## REVIEW: CHANGES
+
+followed by a ## FILE block (same format as above, full file content) for ONLY each file you are revising, then:
+
+${NOTES_CONTRACT}`;
 }

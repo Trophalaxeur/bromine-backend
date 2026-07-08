@@ -2,7 +2,7 @@ import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from '../config.ts';
-import type { TailoredFile, Section } from './sessions.ts';
+import type { TailoredFile, Section, GenerationAttempt } from './sessions.ts';
 import type { CvBase } from './josiane.ts';
 import type { GenerationReport } from './generation-report.ts';
 
@@ -57,6 +57,8 @@ export interface CommittedSession {
   // prefill them for a cheap "regenerate with a small tweak" instead of making Florian retype.
   instructions: string;
   report?: GenerationReport;
+  // Trail of attempts, persisted so it survives past the in-memory draft's 24h TTL.
+  history?: GenerationAttempt[];
 }
 
 /** Writes the tailored files to disk on the LOCAL checkout (dev checkout or
@@ -68,7 +70,13 @@ export interface CommittedSession {
  *  at 24h — without this, a session's copy-blocks are unrecoverable the
  *  moment it's no longer the live draft (e.g. after a server restart, or once
  *  the "historique" dropdown reloads it days later). */
-export async function writeTailoredFiles(input: BriefInput, files: TailoredFile[], sections: Section[], report?: GenerationReport): Promise<void> {
+export async function writeTailoredFiles(
+  input: BriefInput,
+  files: TailoredFile[],
+  sections: Section[],
+  report?: GenerationReport,
+  history?: GenerationAttempt[]
+): Promise<void> {
   const dir = tailoredDir(input.slug);
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, 'brief.md'), buildBrief(input), 'utf-8');
@@ -82,6 +90,7 @@ export async function writeTailoredFiles(input: BriefInput, files: TailoredFile[
     sections,
     instructions: input.instructions,
     report,
+    history,
   };
   await writeFile(path.join(dir, 'session.json'), JSON.stringify(session, null, 2), 'utf-8');
 

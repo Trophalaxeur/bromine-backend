@@ -16,6 +16,10 @@ export interface LLMRequest {
   /** Variable part: user instructions / job offer text. */
   userPrompt: string;
   attachment?: LLMImageAttachment;
+  /** Per-call output cap. The parallel fan-out sends much smaller, targeted prompts
+   *  (one file each) than the old monolith, so each can afford a tight cap — which
+   *  also keeps non-streaming requests well under the SDK's HTTP timeout window. */
+  maxTokens?: number;
 }
 
 export interface ILLMProvider {
@@ -71,7 +75,11 @@ class AnthropicSDKProvider implements ILLMProvider {
   #client: Anthropic;
 
   constructor(apiKey: string) {
-    this.#client = new Anthropic({ apiKey });
+    // maxRetries 3 (SDK default is 2): the parallel fan-out fires ~5 independent calls per
+    // generation, so a per-call retry on transient errors (429/5xx/connection — handled by the
+    // SDK, not us) is what keeps "one flaky sub-call fails the whole generation" from getting
+    // more likely than the old single call, not less.
+    this.#client = new Anthropic({ apiKey, maxRetries: 3 });
   }
 
   async complete(request: LLMRequest): Promise<string> {
@@ -91,7 +99,7 @@ class AnthropicSDKProvider implements ILLMProvider {
 
     const response = await this.#client.messages.create({
       model: 'claude-opus-4-8',
-      max_tokens: 8192,
+      max_tokens: request.maxTokens ?? 8192,
       // 1h TTL (not the 5min default) — Florian iterates on the same base/locale
       // across several regenerations within a session while tweaking
       // instructions, and the system prompt (Josiane + full CV source +
@@ -99,6 +107,14 @@ class AnthropicSDKProvider implements ILLMProvider {
       system: [{ type: 'text', text: request.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }],
       messages: [{ role: 'user', content: userContent }],
     });
+
+    // A truncated response silently drops whatever the call was mid-way through —
+    // fail loudly rather than hand response-parser.ts a partial ## FILE: block.
+    // With the fan-out's small per-call caps this shouldn't trigger; if it does,
+    // the cap for that call type is undersized (see prompt.ts sizing note).
+    if (response.stop_reason === 'max_tokens') {
+      throw new Error(`Anthropic response truncated at max_tokens (${response.usage.output_tokens} output tokens) — the call is incomplete.`);
+    }
 
     const textBlock = response.content.find((block) => block.type === 'text');
     if (!textBlock || textBlock.type !== 'text') throw new Error('Anthropic response contained no text block');
