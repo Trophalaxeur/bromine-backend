@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { GenerationReport } from './generation-report.ts';
 
 export interface TailoredFile {
   /** Path relative to cv/tailored/<slug>/, e.g. "fr/profile.md" or "fr/experiences/2025-bluewhale.md" */
@@ -12,6 +13,16 @@ export interface Section {
   copyable: true;
 }
 
+/** One generation attempt on a session — appended (never overwritten) each time the same
+ *  sessionId is regenerated, so the extension can show what changed between attempts while
+ *  Florian iterates on the instructions. */
+export interface GenerationAttempt {
+  instructions: string;
+  name: string;
+  timestamp: number;
+  report?: GenerationReport;
+}
+
 export interface Draft {
   sessionId: string;
   slug: string;
@@ -21,9 +32,15 @@ export interface Draft {
   instructions: string;
   files: TailoredFile[];
   sections: Section[];
+  report?: GenerationReport;
+  // Trail of attempts for this session, oldest→newest; report above always equals history.at(-1).report.
+  history: GenerationAttempt[];
   pdfPath: string;
   createdAt: number;
 }
+
+/** Max attempts retained per session — bounds the in-memory draft (and committed session.json). */
+export const HISTORY_CAP = 10;
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const drafts = new Map<string, Draft>();
