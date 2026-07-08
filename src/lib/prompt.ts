@@ -94,11 +94,11 @@ Respond with EXACTLY this structure. The only place free-form prose is allowed i
 
 ## ALSO_REWRITE
 <zero or more of the reused-as-is experience filenames listed above, one bare filename per line (e.g. 2011-inria.md), that THIS request warrants rewriting. Omit this whole block if none.>
-${input.hasAttachment ? `
+
+${NOTES_CONTRACT}${input.hasAttachment ? `
+
 ## ATTACHMENT_CONTEXT
-<faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit this block only if there is genuinely nothing in the image.>
-` : ''}
-${NOTES_CONTRACT}`;
+This block MUST be the very last thing in your response: everything from the line below to the end of your response is treated as the image transcription. Faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit the whole block if there is genuinely nothing in the image.` : ''}`;
 }
 
 /**
@@ -160,7 +160,7 @@ Respond with EXACTLY one of these two shapes and nothing else:
 
 ## REVIEW: CHANGES
 
-followed by a ## FILE block (same format as above, full file content) for ONLY each file you are revising, then:
+followed by a ## FILE block (same format as above, full file content) for ONLY each file you are revising — every path MUST be one of the files shown above; do NOT introduce new files (any unknown path is dropped) — then:
 
 ${NOTES_CONTRACT}`;
 }

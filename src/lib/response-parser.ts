@@ -60,13 +60,18 @@ export interface ParsedCore {
 
 /** Parses the core-identity call (buildCorePrompt): NAME + core FILE blocks + ## ALSO_REWRITE. */
 export function parseCoreResponse(text: string, fallbackName: string): ParsedCore {
-  const nameMatch = text.match(/##\s*NAME\s*\n+([^\n]+)/i);
+  // Pull the image transcription out FIRST and parse everything else from `rest`, with that block
+  // removed. It's the one part of the response derived from attacker-influenceable content (a
+  // job-offer screenshot), so its text must never reach extractFileBlocks/parseNotes — otherwise a
+  // transcription carrying a ## FILE:/## NOTES heading would be harvested as a real block.
+  const { attachmentContext, rest } = extractAttachmentContext(text);
+  const nameMatch = rest.match(/##\s*NAME\s*\n+([^\n]+)/i);
   const name = nameMatch ? nameMatch[1].trim() : fallbackName;
-  const files = extractFileBlocks(text);
+  const files = extractFileBlocks(rest);
   if (files.length === 0) {
     throw new Error('Core generation response contained no ## FILE: blocks (expected at least profile.md)');
   }
-  return { name, files, alsoRewrite: parseAlsoRewrite(text), attachmentContext: parseAttachmentContext(text), notes: parseNotes(text) };
+  return { name, files, alsoRewrite: parseAlsoRewrite(rest), attachmentContext, notes: parseNotes(rest) };
 }
 
 export interface ParsedExperience {
@@ -110,13 +115,20 @@ function parseAlsoRewrite(text: string): string[] {
     .map((line) => line.split('/').pop() as string);
 }
 
-/** Extracts the optional ## ATTACHMENT_CONTEXT block — the core call's text transcription of the
- *  attached image, which the parallel experience calls read in place of the image itself. Stops at
- *  the next ## heading so it never swallows the trailing ## NOTES. Returns undefined when absent. */
-function parseAttachmentContext(text: string): string | undefined {
-  const match = text.match(/##\s*ATTACHMENT_CONTEXT\s*\n([\s\S]*?)(?=\n##\s|$)/i);
-  const context = match?.[1].trim();
-  return context || undefined;
+/**
+ * Splits the core call's optional ## ATTACHMENT_CONTEXT block off the rest of the response — the
+ * transcription of the attached image, fed to the parallel experience calls in place of the image.
+ * The contract makes it the trailing block, so everything from the heading to EOF is the transcription
+ * and is stripped wholesale: this is robust to ANY content inside it (a `## FILE:`/`## NOTES` heading,
+ * a stray ``` fence), none of which can then leak into the harvesting parsers (extractFileBlocks/
+ * parseNotes/...). That matters because the transcription is the one attacker-influenceable part of
+ * the response (a job-offer screenshot). Returns the text unchanged with no context when absent.
+ */
+function extractAttachmentContext(text: string): { attachmentContext?: string; rest: string } {
+  const match = text.match(/##\s*ATTACHMENT_CONTEXT\s*\n([\s\S]*)$/i);
+  if (match?.index === undefined) return { rest: text };
+  const attachmentContext = match[1].trim() || undefined;
+  return { attachmentContext, rest: text.slice(0, match.index) };
 }
 
 /**
