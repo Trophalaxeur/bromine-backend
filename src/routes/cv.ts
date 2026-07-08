@@ -162,7 +162,7 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     const reviewStart = Date.now();
     reviewText = await llm.complete({
       systemPrompt,
-      userPrompt: buildReviewPrompt({ base, locale: body.locale, instructions: body.instructions, files }),
+      userPrompt: buildReviewPrompt({ base, locale: body.locale, instructions: body.instructions, files, attachmentContext: core.attachmentContext }),
       maxTokens: REVIEW_MAX_TOKENS,
     });
     console.log(`[cv/generate] review call took ${Date.now() - reviewStart}ms`);

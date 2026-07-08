@@ -68,7 +68,9 @@ export async function loadCvSource(locale: 'fr' | 'en'): Promise<CvSource> {
 
   const experiencesDir = path.join(localeDir, 'experiences');
   const allExperienceEntries = await readdir(experiencesDir).catch(() => [] as string[]);
-  const experienceFiles = allExperienceEntries.filter((f) => f.endsWith('.md'));
+  // Sorted: readdir() order is filesystem-dependent, so without this the assembled/section order
+  // would vary between checkouts. Filenames are `YYYY-...md`, so a lexical sort is chronological.
+  const experienceFiles = allExperienceEntries.filter((f) => f.endsWith('.md')).sort();
   const experienceContents: Record<string, string> = {};
   for (const file of experienceFiles) {
     const content = await readFile(path.join(experiencesDir, file), 'utf-8');

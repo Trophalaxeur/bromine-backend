@@ -32,6 +32,9 @@ export interface ReviewPromptInput {
   instructions: string;
   /** The full assembled set of tailored files to review. */
   files: TailoredFile[];
+  /** The core call's transcription of the attached image (## ATTACHMENT_CONTEXT), so the reviewer
+   *  can judge whether the emphasis actually matches the offer — it never sees the image itself. */
+  attachmentContext?: string;
 }
 
 function attachmentNote(hasAttachment: boolean): string {
@@ -80,7 +83,7 @@ If — and only if — this specific request makes one of those reused experienc
 
 Emphasis strategy, decided from the instructions: for a targeted opportunity, foreground what's relevant to it; for a repositioning/emphasis request, reorient wording toward the requested angle. Either way no experience is dropped. For enrichment, consult \`memoire_cv.md\` (already in your context) for factual actions, metrics, or context supporting the angle — strengthen without inventing.
 
-Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block at the very end:
+Respond with EXACTLY this structure. The only place free-form prose is allowed is the optional ## NOTES block, which comes ${input.hasAttachment ? 'just before the final ## ATTACHMENT_CONTEXT block' : 'at the very end'}:
 
 ## NAME
 <short name — company + role for a targeted opportunity, or a short label like "Lead Dev repositioning" for a generic repositioning request>
@@ -94,11 +97,11 @@ Respond with EXACTLY this structure. The only place free-form prose is allowed i
 
 ## ALSO_REWRITE
 <zero or more of the reused-as-is experience filenames listed above, one bare filename per line (e.g. 2011-inria.md), that THIS request warrants rewriting. Omit this whole block if none.>
-${input.hasAttachment ? `
+
+${NOTES_CONTRACT}${input.hasAttachment ? `
+
 ## ATTACHMENT_CONTEXT
-<faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit this block only if there is genuinely nothing in the image.>
-` : ''}
-${NOTES_CONTRACT}`;
+This block MUST be the very last thing in your response — the ## NOTES block, if you emit one, comes BEFORE it. Everything from the line below to the end of your response is treated as the image transcription. Faithfully transcribe the attached image into text: the job offer's role, requirements, keywords, and any constraints. The per-experience tailoring calls run in parallel and CANNOT see the image — this block is the only way its content reaches them. Transcribe, don't editorialize. Omit the whole block if there is genuinely nothing in the image.` : ''}`;
 }
 
 /**
@@ -140,7 +143,7 @@ export function buildReviewPrompt(input: ReviewPromptInput): string {
   return `You are the editorial reviewer for a CV that was just assembled from several INDEPENDENT tailoring calls (one for the core identity, one per experience). Because they ran without seeing each other's output, review the whole set for consistency. Follow your editorial mandate in SKILL.md above. Target variant: "${base}". Locale: ${locale}.
 
 Original instructions from Florian:
-${input.instructions}
+${input.instructions}${attachmentContextNote(input.attachmentContext)}
 
 Check specifically for:
 - Coherence between ${locale}/skills.md's emphasis and what the experiences (freshly rewritten AND reused-as-is) actually foreground.
@@ -160,7 +163,7 @@ Respond with EXACTLY one of these two shapes and nothing else:
 
 ## REVIEW: CHANGES
 
-followed by a ## FILE block (same format as above, full file content) for ONLY each file you are revising, then:
+followed by a ## FILE block (same format as above, full file content) for ONLY each file you are revising — every path MUST be one of the files shown above; do NOT introduce new files (any unknown path is dropped) — then:
 
 ${NOTES_CONTRACT}`;
 }
