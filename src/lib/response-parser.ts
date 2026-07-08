@@ -23,10 +23,12 @@ import type { TailoredFile, Section } from './sessions.ts';
 // path can't smuggle one in either; no real CV file uses these names.
 const RESERVED_TAILORED_FILES = new Set(['brief.md', 'session.json', 'notes.md']);
 
+// Fresh instance per call — a shared global-flag RegExp would carry lastIndex between callers.
+const fileBlockRegex = () => /##\s*FILE:\s*([^\n]+)\n+```(?:markdown|md)?\n([\s\S]*?)```/gi;
+
 function extractFileBlocks(text: string): TailoredFile[] {
   const files: TailoredFile[] = [];
-  const fileBlockRegex = /##\s*FILE:\s*([^\n]+)\n+```(?:markdown|md)?\n([\s\S]*?)```/gi;
-  for (const match of text.matchAll(fileBlockRegex)) {
+  for (const match of text.matchAll(fileBlockRegex())) {
     const relativePath = match[1].trim();
     const normalized = path.posix.normalize(relativePath);
     const looksLikeDirectory = normalized === '.' || normalized.endsWith('/');
@@ -101,11 +103,14 @@ function parseAlsoRewrite(text: string): string[] {
 
 /**
  * Extracts the optional trailing ## NOTES block (the sanctioned place for the model's remarks —
- * see prompt.ts). Returns undefined when absent or empty. CV markdown never carries a "## NOTES"
- * heading of its own, so a plain match on the first occurrence is safe here.
+ * see prompt.ts). Returns undefined when absent or empty. NOTES is contractually the trailing
+ * block, so the search starts past the last ## FILE block: a generated CV file that happens to
+ * carry a "## Notes" heading of its own can't then be mistaken for the model's report notes.
  */
 export function parseNotes(text: string): string | undefined {
-  const match = text.match(/##\s*NOTES\s*\n([\s\S]*)$/i);
+  let searchFrom = 0;
+  for (const m of text.matchAll(fileBlockRegex())) searchFrom = (m.index ?? 0) + m[0].length;
+  const match = text.slice(searchFrom).match(/##\s*NOTES\s*\n([\s\S]*)$/i);
   const notes = match?.[1].trim();
   return notes || undefined;
 }

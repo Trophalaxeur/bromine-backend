@@ -55,7 +55,9 @@ export interface CommittedSession {
   sections: Section[];
   // The original instructions that produced this session — persisted so the extension can
   // prefill them for a cheap "regenerate with a small tweak" instead of making Florian retype.
-  instructions: string;
+  // Optional: sessions committed before this field existed have no instructions on disk, so the
+  // type must not promise a string the round-tripped session.json can't deliver.
+  instructions?: string;
   report?: GenerationReport;
   // Trail of attempts, persisted so it survives past the in-memory draft's 24h TTL.
   history?: GenerationAttempt[];
