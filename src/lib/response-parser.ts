@@ -18,6 +18,11 @@ import type { TailoredFile, Section } from './sessions.ts';
  * a (Windows-style) separator. Directory-like results ('.' or a trailing '/') are rejected too —
  * they'd pass the traversal check but blow up writeFile() with EISDIR downstream.
  */
+// Control files writeTailoredFiles (git.ts) owns at the tailored-dir root. A FILE block must never
+// address one — writeFile would clobber the session record. Matched by basename below so a nested
+// path can't smuggle one in either; no real CV file uses these names.
+const RESERVED_TAILORED_FILES = new Set(['brief.md', 'session.json', 'notes.md']);
+
 function extractFileBlocks(text: string): TailoredFile[] {
   const files: TailoredFile[] = [];
   const fileBlockRegex = /##\s*FILE:\s*([^\n]+)\n+```(?:markdown|md)?\n([\s\S]*?)```/gi;
@@ -27,6 +32,9 @@ function extractFileBlocks(text: string): TailoredFile[] {
     const looksLikeDirectory = normalized === '.' || normalized.endsWith('/');
     if (relativePath.includes('\\') || looksLikeDirectory || path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
       throw new Error(`LLM response FILE block has an invalid path: "${relativePath}"`);
+    }
+    if (RESERVED_TAILORED_FILES.has(path.posix.basename(normalized))) {
+      throw new Error(`LLM response FILE block targets a reserved control file: "${relativePath}"`);
     }
     const content = match[2].replace(/\n$/, '');
     files.push({ relativePath: normalized, content });

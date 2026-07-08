@@ -113,7 +113,9 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   // 2. Which experiences get a rewrite call: the always-rewrite set ∪ any the core promoted
   //    (filtered to real reused candidates so a hallucinated filename can't sneak in).
   const alsoRewrite = core.alsoRewrite.filter((f) => otherFiles.includes(f));
-  const toRewrite = [...priorityFiles, ...alsoRewrite];
+  // Deduped: the core can list the same filename twice in ## ALSO_REWRITE, which would otherwise
+  // fire duplicate rewrite calls for one experience and double-count it in callSummary.
+  const toRewrite = [...new Set([...priorityFiles, ...alsoRewrite])];
   const toReuse = cvSource.experienceFiles.filter((f) => !toRewrite.includes(f));
 
   // 3. Fan out one call per experience to rewrite, concurrency-capped (cache is warm now).
@@ -136,7 +138,13 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
   //    reused files are written explicitly so the committed tailored dir is a complete self-contained
   //    record rather than one that silently depends on the render-time fallback to the real CV.
   const experienceByName = new Map<string, TailoredFile>();
-  for (const r of experienceResults) experienceByName.set(r.file.relativePath.split('/').pop() as string, r.file);
+  // Key by the filename we requested (runWithLimit preserves toRewrite's order), NOT the path the
+  // model echoed back — a wrong/renamed FILE path would otherwise land under a key no real
+  // experience matches and get silently dropped from orderedExperiences. The relativePath is pinned
+  // to the canonical location for the same reason, so the file is always written where it belongs.
+  toRewrite.forEach((file, i) =>
+    experienceByName.set(file, { relativePath: `${body.locale}/experiences/${file}`, content: experienceResults[i].file.content })
+  );
   for (const file of toReuse) experienceByName.set(file, { relativePath: `${body.locale}/experiences/${file}`, content: cvSource.experienceContents[file] });
   const orderedExperiences = cvSource.experienceFiles.map((f) => experienceByName.get(f)).filter((f): f is TailoredFile => Boolean(f));
   let files: TailoredFile[] = [...core.files, ...orderedExperiences];

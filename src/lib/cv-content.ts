@@ -16,10 +16,14 @@ export interface CvSource {
 /** Reads the `rewritePriority` frontmatter flag from a raw experience file.
  *  Absent → the experience is reused as-is (no rewrite LLM call) by default;
  *  `high` → always rewritten. Deliberately a simple line match rather than a
- *  full YAML parse — the field is a single scalar and this avoids a dependency. */
+ *  full YAML parse — the field is a single scalar and this avoids a dependency.
+ *  Scoped to the leading `---` frontmatter block so a stray `rewritePriority:`
+ *  line in the body can't flip detection, and lowercased so `High`/`HIGH` count. */
 export function rewritePriorityOf(content: string): string | undefined {
-  const match = content.match(/^rewritePriority:\s*["']?([A-Za-z]+)["']?\s*$/m);
-  return match?.[1];
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatter) return undefined;
+  const match = frontmatter[1].match(/^rewritePriority:\s*["']?([A-Za-z]+)["']?\s*$/m);
+  return match?.[1].toLowerCase();
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
