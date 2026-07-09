@@ -89,6 +89,12 @@ export function parseExperienceResponse(text: string): ParsedExperience {
   return { file: files[0], notes: parseNotes(text) };
 }
 
+/** Parses a page-fit condense call (buildCondensePrompt): zero or more revised FILE blocks. The
+ *  caller keeps only the ones whose path already exists — a condense pass never adds or drops files. */
+export function parseCondenseResponse(text: string): TailoredFile[] {
+  return extractFileBlocks(text);
+}
+
 export type ParsedReview = { changed: false; notes?: string } | { changed: true; files: TailoredFile[]; notes?: string };
 
 /** Parses the editorial review call (buildReviewPrompt). Only applies changes when the model

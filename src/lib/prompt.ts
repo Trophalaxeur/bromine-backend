@@ -167,3 +167,37 @@ followed by a ## FILE block (same format as above, full file content) for ONLY e
 
 ${NOTES_CONTRACT}`;
 }
+
+export interface CondensePromptInput {
+  base: CvBase;
+  locale: 'fr' | 'en';
+  /** The subset of assembled files to shorten (skills.md, or the experience files). */
+  files: TailoredFile[];
+  currentPageCount: number;
+  targetPageCount: number;
+}
+
+/**
+ * Page-fit condense call (§5): the short CV overran its page budget, so shorten a specific subset of
+ * files WITHOUT dropping facts. Reuses the ## FILE contract; the caller applies only the returned
+ * files that already exist (a condense pass must never add or drop files).
+ */
+export function buildCondensePrompt(input: CondensePromptInput): string {
+  const { base, locale } = input;
+  const fileBlocks = input.files.map((f) => `## FILE: ${f.relativePath}\n\`\`\`markdown\n${f.content}\n\`\`\``).join('\n\n');
+
+  return `The assembled "${base}" CV renders to ${input.currentPageCount} pages but MUST fit ${input.targetPageCount}. Shorten ONLY the files below so the whole CV fits, following your editorial mandate in SKILL.md above. Locale: ${locale}.
+
+Hard rules:
+- Preserve every FACT: employers, roles, dates, missions, metrics. This is about wording density, NOT dropping content or experiences.
+- Tighten prose only: cut filler, merge redundant bullets, shorten phrasings. Keep the exact frontmatter shape and the same variant blocks (:::${base}:::, etc.) as the source.
+- Touch NOTHING outside the files below.
+
+Respond with a ## FILE block (same format, full file content) for EACH file you shortened. Omit a file you genuinely cannot shorten further. Then, optionally:
+
+${NOTES_CONTRACT}
+
+Files to condense:
+
+${fileBlocks}`;
+}

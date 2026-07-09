@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCorePrompt, buildExperiencePrompt, buildReviewPrompt } from './prompt.ts';
+import { buildCorePrompt, buildExperiencePrompt, buildReviewPrompt, buildCondensePrompt } from './prompt.ts';
 import type { CvBase } from './josiane.ts';
 
 const base: CvBase = 'short';
@@ -42,5 +42,17 @@ describe('buildReviewPrompt', () => {
   it('omits the attachment note when there is no context', () => {
     const prompt = buildReviewPrompt({ ...common, files });
     expect(prompt).not.toContain('transcribed by the core call');
+  });
+});
+
+describe('buildCondensePrompt', () => {
+  const files = [{ relativePath: 'fr/skills.md', content: 'a long skills section' }];
+
+  it('states the current and target page counts and includes the files to shorten', () => {
+    const prompt = buildCondensePrompt({ ...common, files, currentPageCount: 3, targetPageCount: 2 });
+    expect(prompt).toContain('3 pages');
+    expect(prompt).toContain('fit 2');
+    expect(prompt).toContain('fr/skills.md');
+    expect(prompt).toContain('a long skills section');
   });
 });

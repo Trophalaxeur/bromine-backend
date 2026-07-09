@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCoreResponse, parseExperienceResponse, parseReviewResponse, parseNotes } from './response-parser.ts';
+import { parseCoreResponse, parseExperienceResponse, parseReviewResponse, parseCondenseResponse, parseNotes } from './response-parser.ts';
 
 const fileBlock = (p: string, body = 'hello') => `## FILE: ${p}\n\`\`\`markdown\n${body}\n\`\`\``;
 
@@ -166,6 +166,21 @@ tightened tone`;
 
   it('treats CHANGES with no FILE block as no change', () => {
     expect(parseReviewResponse('## REVIEW: CHANGES\n\nnothing here').changed).toBe(false);
+  });
+});
+
+describe('parseCondenseResponse', () => {
+  it('returns every revised FILE block', () => {
+    const text = `${fileBlock('fr/skills.md', 'shorter skills')}\n\n${fileBlock('fr/experiences/a.md', 'shorter a')}`;
+    expect(parseCondenseResponse(text).map((f) => f.relativePath)).toEqual(['fr/skills.md', 'fr/experiences/a.md']);
+  });
+
+  it('returns nothing when the model shortened nothing', () => {
+    expect(parseCondenseResponse('## NOTES\ncannot shorten further')).toEqual([]);
+  });
+
+  it('still enforces the path guard', () => {
+    expect(() => parseCondenseResponse(fileBlock('fr/../.git/config'))).toThrow(/invalid path/i);
   });
 });
 
