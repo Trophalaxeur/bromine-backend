@@ -26,6 +26,20 @@ const RESERVED_TAILORED_FILES = new Set(['brief.md', 'session.json', 'notes.md']
 // Fresh instance per call — a shared global-flag RegExp would carry lastIndex between callers.
 const fileBlockRegex = () => /##\s*FILE:\s*([^\n]+)\n+```(?:markdown|md)?\n([\s\S]*?)```/gi;
 
+/**
+ * Single-line, length-capped echo of a raw LLM response, appended to the "no ## FILE:" errors so
+ * the actual model output is visible wherever the error surfaces (the extension, journald) instead
+ * of being discarded. The dominant trigger is the agentic Claude CLI dev provider answering in
+ * prose ("I'll create the profile…") instead of emitting blocks — the preview shows that at a
+ * glance. Whitespace is collapsed so it stays on one line; the total length is reported so a
+ * near-empty vs. long-but-malformed response are distinguishable.
+ */
+function responsePreview(text: string, max = 500): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  const head = collapsed.length > max ? `${collapsed.slice(0, max)}…` : collapsed;
+  return `${head} (${text.length} chars total)`;
+}
+
 function extractFileBlocks(text: string): TailoredFile[] {
   const files: TailoredFile[] = [];
   for (const match of text.matchAll(fileBlockRegex())) {
@@ -69,7 +83,7 @@ export function parseCoreResponse(text: string, fallbackName: string): ParsedCor
   const name = nameMatch ? nameMatch[1].trim() : fallbackName;
   const files = extractFileBlocks(rest);
   if (files.length === 0) {
-    throw new Error('Core generation response contained no ## FILE: blocks (expected at least profile.md)');
+    throw new Error(`Core generation response contained no ## FILE: blocks (expected at least profile.md). Raw response: ${responsePreview(text)}`);
   }
   return { name, files, alsoRewrite: parseAlsoRewrite(rest), attachmentContext, notes: parseNotes(rest) };
 }
@@ -83,7 +97,7 @@ export interface ParsedExperience {
 export function parseExperienceResponse(text: string): ParsedExperience {
   const files = extractFileBlocks(text);
   if (files.length === 0) {
-    throw new Error('Experience generation response contained no ## FILE: block');
+    throw new Error(`Experience generation response contained no ## FILE: block. Raw response: ${responsePreview(text)}`);
   }
   // The contract asks for exactly one file; if the model over-emits, keep the first.
   return { file: files[0], notes: parseNotes(text) };

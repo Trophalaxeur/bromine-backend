@@ -26,6 +26,15 @@ export interface ILLMProvider {
   complete(request: LLMRequest): Promise<string>;
 }
 
+// Appended to the CLI provider's system prompt (via --append-system-prompt) to keep the agentic
+// `claude -p` on the response-parser.ts contract: emit the structured blocks as literal text, never
+// act on the task. Belt-and-suspenders next to --disallowedTools — the tools are gone, this stops
+// it wrapping the blocks in prose the parser would then reject.
+const CLI_CONTRACT_REMINDER =
+  'Output ONLY the structured blocks the instructions ask for (## NAME, ## FILE:, ## ALSO_REWRITE, ' +
+  '## ATTACHMENT_CONTEXT, ## NOTES). Emit them as literal text in your reply. No preamble, no ' +
+  'commentary, no tool use, and do not attempt to create or edit any files yourself.';
+
 /**
  * Dev-only provider: shells out to the local Claude Code CLI, reusing its
  * existing auth so no separate API key is needed while iterating locally.
@@ -50,18 +59,42 @@ class ClaudeCLIProvider implements ILLMProvider {
     try {
       await writeFile(systemPromptFile, request.systemPrompt, 'utf-8');
 
+      // `claude -p` is an AGENT, not a plain text endpoint: with the user's MCP servers and
+      // Write/Edit/Bash tools loaded it tends to *do* the task (write files, then report) instead
+      // of *emitting* the ## FILE: text contract — the response then parses to zero blocks. Rein it
+      // back into a pure text generator:
+      //   --strict-mcp-config (no --mcp-config) → load zero MCP servers (github, vercel, …)
+      //   --disallowedTools Write Edit Bash NotebookEdit → it *can't* mutate the repo, only answer
+      //   --append-system-prompt → restate the "blocks only, no prose, no tools" contract
+      //   --output-format json → parse the `result` field robustly and surface CLI-level failures
+      //     (max-turns, permission denials) as errors instead of passing prose to the parser
+      const args = [
+        '-p',
+        '--system-prompt-file', systemPromptFile,
+        '--strict-mcp-config',
+        '--disallowedTools', 'Write', 'Edit', 'Bash', 'NotebookEdit',
+        '--append-system-prompt', CLI_CONTRACT_REMINDER,
+        '--output-format', 'json',
+      ];
       return await new Promise((resolve, reject) => {
-        const child = spawn('claude', ['-p', '--system-prompt-file', systemPromptFile], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        const child = spawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', (chunk) => (stdout += chunk));
         child.stderr.on('data', (chunk) => (stderr += chunk));
         child.on('error', reject);
         child.on('close', (code) => {
-          if (code !== 0) reject(new Error(`claude CLI exited with code ${code}: ${stderr}`));
-          else resolve(stdout.trim());
+          if (code !== 0) return reject(new Error(`claude CLI exited with code ${code}: ${stderr}`));
+          let parsed: { result?: string; is_error?: boolean; subtype?: string; stop_reason?: string };
+          try {
+            parsed = JSON.parse(stdout);
+          } catch {
+            return reject(new Error(`claude CLI returned non-JSON output (expected --output-format json): ${stdout.slice(0, 500)}`));
+          }
+          if (parsed.is_error || parsed.subtype !== 'success' || typeof parsed.result !== 'string') {
+            return reject(new Error(`claude CLI reported a failed run (subtype=${parsed.subtype}, stop_reason=${parsed.stop_reason}): ${stdout.slice(0, 500)}`));
+          }
+          resolve(parsed.result.trim());
         });
         child.stdin.end(request.userPrompt);
       });
