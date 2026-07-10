@@ -85,7 +85,7 @@ Once a change is merged to `main`, ship it to the LXC in one command from thalli
 ssh root@bromine.lan bromine-deploy
 ```
 
-`bromine-deploy` (installed on the LXC by the `gallium-homelab` Ansible role) runs `git pull --ff-only` + `npm ci` as `bromineuser`, then restarts the `bromine-backend` service. This is the normal path — it does **not** need Ansible or a full playbook run. Handy thallium alias:
+`bromine-deploy` (installed on the LXC by the `gallium-homelab` Ansible role) runs `git pull --ff-only` + `npm ci` as `bromineuser` in the prod checkout at `/opt/bromine-backend`, then restarts the `bromine-backend` systemd service (`ExecStart=/usr/bin/node --experimental-strip-types /opt/bromine-backend/src/index.ts`, `EnvironmentFile=/etc/bromine.env`). This is the normal path — it does **not** need Ansible or a full playbook run. Handy thallium alias:
 
 ```bash
 alias bromine-deploy='ssh root@bromine.lan bromine-deploy'
