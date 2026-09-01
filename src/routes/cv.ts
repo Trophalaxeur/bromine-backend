@@ -240,16 +240,32 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
     const filesTouched = new Set<string>();
     let tightMargins = false;
 
-    // Ask the LLM to shorten `subset`; apply only the returned files that already exist (a condense
-    // must never add/drop files) and report which paths it actually rewrote.
+    // Ask the LLM to shorten `subset`, one call per file (concurrency-capped like the generation
+    // fan-out). A single call re-emitting several full files at once blew past max_tokens on longer
+    // CVs — the whole condense step aborted and shipped an over-budget render. Per file, each call
+    // re-emits at most one file so it stays well under EXPERIENCE_MAX_TOKENS, and a truncation/parse
+    // failure on one file is logged and skipped rather than sinking the others (partial progress
+    // beats all-or-nothing). Applies only the returned files that already exist (a condense must
+    // never add/drop files) and reports which paths it actually rewrote.
     const condense = async (subset: TailoredFile[], maxTokens: number): Promise<string[]> => {
-      const text = await llm.complete({
-        systemPrompt,
-        userPrompt: buildCondensePrompt({ base, locale: body.locale, files: subset, currentPageCount: render.pageCount, targetPageCount: SHORT_PAGE_BUDGET }),
-        maxTokens,
-      });
       const known = new Set(files.map((f) => f.relativePath));
-      const applied = parseCondenseResponse(text).filter((f) => known.has(f.relativePath));
+      const perFile = await runWithLimit(
+        subset.map((file) => async () => {
+          try {
+            const text = await llm.complete({
+              systemPrompt,
+              userPrompt: buildCondensePrompt({ base, locale: body.locale, files: [file], currentPageCount: render.pageCount, targetPageCount: SHORT_PAGE_BUDGET }),
+              maxTokens,
+            });
+            return parseCondenseResponse(text).filter((f) => known.has(f.relativePath));
+          } catch (err) {
+            console.error(`[cv/generate] condense of ${file.relativePath} failed, keeping it as-is:`, err);
+            return [];
+          }
+        }),
+        EXPERIENCE_CONCURRENCY
+      );
+      const applied = perFile.flat();
       if (applied.length) {
         const revised = new Map(applied.map((f) => [f.relativePath, f]));
         files = files.map((f) => revised.get(f.relativePath) ?? f);
@@ -279,7 +295,9 @@ async function runGeneration(sessionId: string, base: CvBase, body: GenerateBody
       }
       if (render.pageCount > SHORT_PAGE_BUDGET) {
         const experiences = files.filter((f) => f.relativePath.includes('/experiences/'));
-        const touched = experiences.length ? await condense(experiences, REVIEW_MAX_TOKENS) : [];
+        // Per-file now (see condense above), so the per-call cap matches the generation fan-out
+        // rather than the review pass's larger multi-file budget.
+        const touched = experiences.length ? await condense(experiences, EXPERIENCE_MAX_TOKENS) : [];
         if (touched.length) {
           touched.forEach((p) => filesTouched.add(p));
           steps.push('experience_condense');
